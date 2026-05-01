@@ -10,15 +10,18 @@ import ta
 import websockets
 from telegram.ext import Application
 
-print("🚨 BOT IS RUNNING NOW")
+print("🚨 BOT STARTED")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+PORT = int(os.getenv("PORT"))
+
+APP_URL = "https://worker-production-5ac8.up.railway.app"
 
 klines = defaultdict(lambda: deque(maxlen=120))
 last_sent = {}
 
-# ================= ANALYSIS =================
+# ===== ANALYSIS =====
 def ai_score(f):
     score = sum(f.values())
     return int((1 / (1 + math.exp(-score))) * 100)
@@ -60,11 +63,15 @@ def analyze(symbol):
         "ai": ai
     }
 
-# ================= MESSAGE =================
-def build_msg(s):
-    return f"""
+# ===== SEND =====
+async def send_signal(app, s):
+    now = time.time()
+    if s["symbol"] in last_sent and now - last_sent[s["symbol"]] < 1800:
+        return
+
+    msg = f"""
 📊 {s['symbol']}
-🚀 توصية شراء
+🚀 شراء
 
 💰 دخول: {s['entry']:.4f}
 🎯 هدف: {s['tp']:.4f}
@@ -72,17 +79,10 @@ def build_msg(s):
 
 🧠 قوة: {s['ai']}%
 """
-
-# ================= SEND =================
-async def send_signal(app, s):
-    now = time.time()
-    if s["symbol"] in last_sent and now - last_sent[s["symbol"]] < 1800:
-        return
-
-    await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
+    await app.bot.send_message(chat_id=CHAT_ID, text=msg)
     last_sent[s["symbol"]] = now
 
-# ================= WS =================
+# ===== WS =====
 async def ws_loop(app):
     url = "wss://stream.bybit.com/v5/public/spot"
 
@@ -122,38 +122,26 @@ async def ws_loop(app):
                         if result:
                             await send_signal(app, result)
 
-        except asyncio.CancelledError:
-            print("🛑 WS STOPPED")
-            break
-
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-# ================= MAIN =================
+# ===== MAIN =====
 def main():
-    print("🚀 STARTING BOT...")
-
     app = Application.builder().token(BOT_TOKEN).build()
 
     async def start(app):
-        print("🔥 BOT STARTED")
-        app.ws_task = asyncio.create_task(ws_loop(app))
-
-    async def shutdown(app):
-        print("🛑 SHUTDOWN...")
-        if hasattr(app, "ws_task"):
-            app.ws_task.cancel()
-            try:
-                await app.ws_task
-            except:
-                pass
+        print("🔥 BOT READY")
+        asyncio.create_task(ws_loop(app))
 
     app.post_init = start
-    app.post_shutdown = shutdown
 
-    print("⚡ RUNNING POLLING...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
