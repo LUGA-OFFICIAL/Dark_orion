@@ -19,7 +19,7 @@ CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 klines = defaultdict(lambda: deque(maxlen=120))
 last_sent = {}
 
-# ===== تحليل بسيط =====
+# ================= ANALYSIS =================
 def ai_score(f):
     score = sum(f.values())
     return int((1 / (1 + math.exp(-score))) * 100)
@@ -61,10 +61,11 @@ def analyze(symbol):
         "ai": ai
     }
 
+# ================= MESSAGE =================
 def build_msg(s):
     return f"""
 📊 {s['symbol']}
-🚀 شراء
+🚀 توصية شراء
 
 💰 دخول: {s['entry']:.4f}
 🎯 هدف: {s['tp']:.4f}
@@ -73,14 +74,18 @@ def build_msg(s):
 🧠 قوة: {s['ai']}%
 """
 
+# ================= SEND =================
 async def send_signal(app, s):
     now = time.time()
-    if s["symbol"] in last_sent and now - last_sent[s["symbol"]] < 1800:
-        return
+
+    if s["symbol"] in last_sent:
+        if now - last_sent[s["symbol"]] < 1800:
+            return
+
     await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
     last_sent[s["symbol"]] = now
 
-# ===== WebSocket =====
+# ================= WS =================
 async def ws_loop(app):
     url = "wss://stream.bybit.com/v5/public/spot"
 
@@ -123,19 +128,35 @@ async def ws_loop(app):
                         if result:
                             await send_signal(app, result)
 
+        except asyncio.CancelledError:
+            print("🛑 WS STOPPED")
+            break
+
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-# ===== MAIN =====
+# ================= MAIN =================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    async def start(app):
-        print("🔥 BOT STARTED")
-        asyncio.create_task(ws_loop(app))
+    app.ws_task = None
 
-    app.post_init = start
+    async def on_startup(app):
+        print("🔥 BOT STARTED")
+        app.ws_task = asyncio.create_task(ws_loop(app))
+
+    async def on_shutdown(app):
+        print("🛑 SHUTDOWN...")
+        if app.ws_task:
+            app.ws_task.cancel()
+            try:
+                await app.ws_task
+            except asyncio.CancelledError:
+                pass
+
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
 
     print("⚡ RUNNING POLLING...")
     app.run_polling()
