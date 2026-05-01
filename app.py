@@ -12,63 +12,56 @@ from telegram.ext import Application
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
 
-MAX_SYMBOLS = 35          # عدد الأزواج المراقَبة
-TOP_K = 3                 # عدد الرسائل في كل دفعة
-COOLDOWN_SEC = 1800       # منع تكرار نفس الزوج (30 دقيقة)
+MAX_SYMBOLS = 30
+TOP_K = 3
+COOLDOWN_SEC = 1800
 
-# ================= مصادر =================
+# ================= اتصال =================
 ex = ccxt.binance({"enableRateLimit": True})
 
-# ================= تخزين =================
-klines = defaultdict(lambda: deque(maxlen=120))  # لكل زوج آخر 120 شمعة 1m
-last_sent = {}  # symbol -> last timestamp
+klines = defaultdict(lambda: deque(maxlen=120))
+last_sent = {}
 
-# ================= AI (Lightweight) =================
-def ai_score(features: dict) -> int:
-    # weights بسيطة (تقدر تعدلها)
-    w = {
-        "rsi": 0.2,
-        "macd": 0.2,
-        "trend": 0.2,
-        "volume": 0.2,
-        "momentum": 0.2,
-    }
-    s = (
-        features["rsi"] * w["rsi"] +
-        features["macd"] * w["macd"] +
-        features["trend"] * w["trend"] +
-        features["volume"] * w["volume"] +
-        features["momentum"] * w["momentum"]
+# ================= AI =================
+def ai_score(features):
+    score = (
+        features["rsi"] +
+        features["macd"] +
+        features["trend"] +
+        features["volume"] +
+        features["momentum"]
     )
-    # sigmoid -> نسبة %
-    prob = 1 / (1 + math.exp(-s))
+    prob = 1 / (1 + math.exp(-score))
     return int(prob * 100)
 
-# ================= جلب أفضل الأزواج =================
-def get_top_usdt_symbols(n=MAX_SYMBOLS):
+# ================= العملات =================
+def get_symbols():
     tickers = ex.fetch_tickers()
     pairs = []
+
     for s, d in tickers.items():
         if "/USDT" in s and d.get("quoteVolume"):
-            pairs.append((s.replace("/", "").lower(), d["quoteVolume"]))  # btcusdt
-    pairs.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in pairs[:n]]
+            pairs.append((s.replace("/", "").lower(), d["quoteVolume"]))
 
-# ================= التحليل الذكي =================
-def analyze(symbol: str):
+    pairs.sort(key=lambda x: x[1], reverse=True)
+    return [p[0] for p in pairs[:MAX_SYMBOLS]]
+
+# ================= تحليل =================
+def analyze(symbol):
     data = list(klines[symbol])
     if len(data) < 60:
         return None
 
     df = pd.DataFrame(data, columns=["t","o","h","l","c","v"])
 
-    # مؤشرات
     df["rsi"] = ta.momentum.RSIIndicator(df["c"]).rsi()
     macd = ta.trend.MACD(df["c"])
     df["macd"] = macd.macd()
     df["macd_s"] = macd.macd_signal()
+
     df["ema50"] = ta.trend.EMAIndicator(df["c"], 50).ema_indicator()
     df["ema200"] = ta.trend.EMAIndicator(df["c"], 200).ema_indicator()
+
     df["vma"] = df["v"].rolling(20).mean()
 
     r = df.iloc[-1]
@@ -77,66 +70,43 @@ def analyze(symbol: str):
     price = r["c"]
 
     # ===== Pump =====
-    price_change = (r["c"] - prev["c"]) / prev["c"] * 100
-    volume_spike = r["v"] > (r["vma"] if pd.notna(r["vma"]) else 0) * 2
-    pump = price_change > 1.5 and volume_spike
-
-    # ===== Smart Pullback =====
-    recent_high = df["h"].rolling(10).max().iloc[-1]
-    recent_low  = df["l"].rolling(10).min().iloc[-1]
-    pullback_long  = pump and price < recent_high * 0.995
-    pullback_short = pump and price > recent_low  * 1.005
+    change = (r["c"] - prev["c"]) / prev["c"] * 100
+    vol_spike = r["v"] > r["vma"] * 2
+    pump = change > 1.5 and vol_spike
 
     # ===== Trend =====
     trend_up = r["ema50"] > r["ema200"]
     trend = "صاعد 📈" if trend_up else "هابط 📉"
 
-    # ===== Features للـ AI =====
+    # ===== Pullback =====
+    recent_high = df["h"].rolling(10).max().iloc[-1]
+    pullback = pump and price < recent_high * 0.995
+
+    # ===== AI =====
     features = {
         "rsi": 1 if r["rsi"] < 40 else -1,
         "macd": 1 if r["macd"] > r["macd_s"] else -1,
         "trend": 1 if trend_up else -1,
-        "volume": 1 if volume_spike else -1,
-        "momentum": 1 if price_change > 0 else -1,
+        "volume": 1 if vol_spike else -1,
+        "momentum": 1 if change > 0 else -1
     }
-    ai_prob = ai_score(features)
 
-    # ===== Score إضافي (TA) =====
-    score = 0
-    reasons = []
+    ai = ai_score(features)
 
-    if r["rsi"] < 40:
-        score += 15; reasons.append("RSI مناسب")
-    if r["macd"] > r["macd_s"]:
-        score += 15; reasons.append("MACD إيجابي")
-    if trend_up:
-        score += 15; reasons.append("ترند صاعد")
-    if pump:
-        score += 25; reasons.append("🚨 Pump (سعر+فوليوم)")
-    if pullback_long or pullback_short:
-        score += 30; reasons.append("🎯 دخول بعد تصحيح")
-
-    # ===== الإشارة =====
+    # ===== Signal =====
     signal = None
-    if trend_up and pullback_long and r["macd"] > r["macd_s"]:
-        signal = "شراء ذكي 🧠🚀"
-    elif (not trend_up) and pullback_short and r["macd"] < r["macd_s"]:
-        signal = "بيع ذكي 🧠🔻"
 
-    # فلتر AI
-    if not signal or ai_prob < 70:
+    if trend_up and pullback and r["macd"] > r["macd_s"]:
+        signal = "شراء ذكي 🚀"
+
+    if not signal or ai < 70:
         return None
 
-    # ===== TP/SL =====
+    # ===== TP / SL =====
     entry = price
-    if "شراء" in signal:
-        tp1 = price * 1.015
-        tp2 = price * 1.03
-        sl  = price * 0.97
-    else:
-        tp1 = price * 0.985
-        tp2 = price * 0.97
-        sl  = price * 1.03
+    tp1 = price * 1.015
+    tp2 = price * 1.03
+    sl  = price * 0.97
 
     return {
         "symbol": symbol.upper(),
@@ -146,16 +116,14 @@ def analyze(symbol: str):
         "tp1": tp1,
         "tp2": tp2,
         "sl": sl,
-        "score": min(100, score),
-        "ai": ai_prob,
-        "reasons": reasons,
+        "ai": ai,
         "pump": pump
     }
 
-# ================= الرسالة =================
-def build_msg(x: dict) -> str:
-    reasons = "\n".join([f"✔ {r}" for r in x["reasons"]])
-    pump_text = "\n🚨 تنبيه: حركة انفجارية" if x["pump"] else ""
+# ================= رسالة =================
+def build_msg(x):
+    pump_text = "\n🚨 حركة قوية" if x["pump"] else ""
+
     return f"""━━━━━━━━━━━━━━━
 📊 {x['symbol']}
 
@@ -173,68 +141,71 @@ def build_msg(x: dict) -> str:
 {x['sl']:.4f}
 
 ━━━━━━━━━━━━━━━
-📊 قوة الذكاء: {x['ai']}%  |  Score: {x['score']}%{pump_text}
-
-🧠 التحليل:
-{reasons}
+🧠 قوة الذكاء: {x['ai']}%{pump_text}
 
 ━━━━━━━━━━━━━━━
 ⚠️ إدارة رأس المال مهمة
-━━━━━━━━━━━━━━━
 """
 
-# ================= إرسال Top K =================
-async def send_top(app, candidates):
-    candidates.sort(key=lambda x: (x["ai"], x["score"]), reverse=True)
-    sent = 0
+# ================= إرسال =================
+async def send_top(app, signals):
+    signals.sort(key=lambda x: x["ai"], reverse=True)
+
     now = time.time()
+    sent = 0
 
-    for x in candidates:
-        sym = x["symbol"]
-        if sym in last_sent and now - last_sent[sym] < COOLDOWN_SEC:
-            continue
+    for s in signals:
+        if s["symbol"] in last_sent:
+            if now - last_sent[s["symbol"]] < COOLDOWN_SEC:
+                continue
 
-        await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(x))
-        last_sent[sym] = now
+        await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
+        last_sent[s["symbol"]] = now
+
         sent += 1
         if sent >= TOP_K:
             break
 
-# ================= WebSocket Loop =================
+# ================= WebSocket =================
 async def ws_loop(app):
     while True:
         try:
-            symbols = get_top_usdt_symbols()
+            symbols = get_symbols()
             streams = "/".join([f"{s}@kline_1m" for s in symbols])
+
             url = f"wss://stream.binance.com:9443/stream?streams={streams}"
 
-            async with websockets.connect(url, ping_interval=20) as ws:
+            async with websockets.connect(url) as ws:
                 print("🔥 WS CONNECTED")
-                buffer_candidates = []
+
+                buffer = []
 
                 async for msg in ws:
                     data = json.loads(msg)
                     k = data.get("data", {}).get("k", {})
+
                     if not k:
                         continue
 
                     symbol = k["s"].lower()
-                    t = k["t"]; o = float(k["o"]); h = float(k["h"])
-                    l = float(k["l"]); c = float(k["c"]); v = float(k["v"])
 
-                    # خزّن الشمعة (حتى قبل الإغلاق)
+                    t = k["t"]
+                    o = float(k["o"])
+                    h = float(k["h"])
+                    l = float(k["l"])
+                    c = float(k["c"])
+                    v = float(k["v"])
+
                     klines[symbol].append([t,o,h,l,c,v])
 
-                    # لما الشمعة تقفل
                     if k.get("x"):
                         res = analyze(symbol)
                         if res:
-                            buffer_candidates.append(res)
+                            buffer.append(res)
 
-                    # كل دفعة نرسل أفضل فرص
-                    if len(buffer_candidates) >= 20:
-                        await send_top(app, buffer_candidates)
-                        buffer_candidates.clear()
+                    if len(buffer) >= 15:
+                        await send_top(app, buffer)
+                        buffer.clear()
 
         except Exception as e:
             print("WS ERROR:", e)
@@ -243,8 +214,13 @@ async def ws_loop(app):
 # ================= تشغيل =================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    app.create_task(ws_loop(app))
-    print("🚀 PRO SMART BOT RUNNING")
+
+    async def start(app):
+        print("🚀 BOT STARTED")
+        asyncio.create_task(ws_loop(app))
+
+    app.post_init = start
+
     app.run_polling()
 
 if __name__ == "__main__":
