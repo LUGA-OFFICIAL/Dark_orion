@@ -19,6 +19,9 @@ print("🔥 FILE STARTED")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
+APP_URL = "https://worker-production-5ac8.up.railway.app"
+PORT = int(os.getenv("PORT", 8080))
+
 exchange = ccxt.bybit({"enableRateLimit": True})
 
 klines = defaultdict(lambda: deque(maxlen=120))
@@ -109,7 +112,11 @@ async def ws_loop(app):
 
                 await ws.send(json.dumps({
                     "op": "subscribe",
-                    "args": ["kline.1.BTCUSDT", "kline.1.ETHUSDT", "kline.1.SOLUSDT"]
+                    "args": [
+                        "kline.1.BTCUSDT",
+                        "kline.1.ETHUSDT",
+                        "kline.1.SOLUSDT"
+                    ]
                 }))
 
                 async for msg in ws:
@@ -142,7 +149,7 @@ async def ws_loop(app):
 def main():
     print("🚀 STARTING BOT...")
 
-    # حل conflict نهائي
+    # تنظيف أي webhook قديم
     requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -153,7 +160,13 @@ def main():
 
     app.post_init = start
 
-    app.run_polling()
+    print("⚡ RUNNING WEBHOOK...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
