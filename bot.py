@@ -52,7 +52,7 @@ Price: {price:.2f}"""
                 await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
         except Exception as e:
-            print("Error:", e)
+            print("force rebuild")
 
 # ================= أوامر =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
