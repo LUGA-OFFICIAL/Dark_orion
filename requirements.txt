@@ -5,3 +5,4 @@ ta
 aiohttp
 feedparser
 websockets
+python==3.10.*
