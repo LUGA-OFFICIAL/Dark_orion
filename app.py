@@ -155,6 +155,10 @@ async def ws_loop(app):
                         except Exception as e:
                             print("PARSE ERROR:", e)
 
+        except asyncio.CancelledError:
+            print("🛑 WS STOPPED")
+            break
+
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
@@ -168,13 +172,26 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    async def start(app):
-        print("🔥 BOT STARTED")
-        asyncio.create_task(ws_loop(app))
+    app.ws_task = None
 
-    app.post_init = start
+    async def on_startup(app):
+        print("🔥 BOT STARTED")
+        app.ws_task = asyncio.create_task(ws_loop(app))
+
+    async def on_shutdown(app):
+        print("🛑 SHUTDOWN...")
+        if app.ws_task:
+            app.ws_task.cancel()
+            try:
+                await app.ws_task
+            except:
+                pass
+
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
 
     print("⚡ RUNNING WEBHOOK...")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
