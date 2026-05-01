@@ -1,57 +1,85 @@
 import os
+import asyncio
 import ccxt
 import pandas as pd
 import ta
 
-from telegram.ext import Application
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
+# ================= إعدادات =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID   = int(os.getenv("CHAT_ID"))
+CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
 
-exchange = ccxt.binance()
+exchange = ccxt.binance({"enableRateLimit": True})
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
-# تحليل بسيط
-def analyze(symbol):
-    ohlcv = exchange.fetch_ohlcv(symbol, "1h", limit=100)
-    df = pd.DataFrame(ohlcv, columns=["t","o","h","l","c","v"])
+# ================= تحليل =================
+def get_data(symbol):
+    data = exchange.fetch_ohlcv(symbol, "1h", limit=100)
+    df = pd.DataFrame(data, columns=["t","o","h","l","c","v"])
+    return df
 
+def analyze(df):
     df["rsi"] = ta.momentum.RSIIndicator(df["c"]).rsi()
     macd = ta.trend.MACD(df["c"])
     df["macd"] = macd.macd()
-    df["signal"] = macd.macd_signal()
+    df["macd_s"] = macd.macd_signal()
 
-    last = df.iloc[-1]
+    r = df.iloc[-1]
 
-    if last["rsi"] < 35 and last["macd"] > last["signal"]:
-        return "BUY"
-    elif last["rsi"] > 65 and last["macd"] < last["signal"]:
-        return "SELL"
+    if r["rsi"] < 35 and r["macd"] > r["macd_s"]:
+        return "🟢 BUY"
+    elif r["rsi"] > 65 and r["macd"] < r["macd_s"]:
+        return "🔴 SELL"
+
     return None
 
-# إرسال إشارات
-async def send_signals(app):
-    for symbol in SYMBOLS:
+# ================= إرسال إشارات =================
+async def scan(context):
+    for s in SYMBOLS:
         try:
-            sig = analyze(symbol)
+            df = get_data(s)
+            sig = analyze(df)
+
             if sig:
-                msg = f"📊 {symbol}\nSignal: {sig}"
-                await app.bot.send_message(chat_id=CHAT_ID, text=msg)
+                price = df.iloc[-1]["c"]
+
+                msg = f"""📊 {s}
+Signal: {sig}
+Price: {price:.2f}"""
+
+                await context.bot.send_message(chat_id=CHAT_ID, text=msg)
+
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
 
-# تشغيل تلقائي
-async def job(context):
-    await send_signals(context.application)
+# ================= أوامر =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 البوت شغال مع التحليل")
 
+async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 جاري التحليل...")
+    await scan(context)
+
+# ================= Loop تلقائي =================
+async def loop_task(app):
+    while True:
+        await scan(app)
+        await asyncio.sleep(3600)  # كل ساعة
+
+# ================= تشغيل =================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # كل ساعة
-    app.job_queue.run_repeating(job, interval=3600, first=10)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("scan", scan_cmd))
 
-    print("🔥 AUTO SIGNAL BOT STARTED")
+    # تشغيل تلقائي
+    app.create_task(loop_task(app))
+
+    print("🔥 BOT STARTED")
     app.run_polling()
 
 if __name__ == "__main__":
