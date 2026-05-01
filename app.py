@@ -1,6 +1,4 @@
 import os
-print("TOKEN:", os.getenv("BOT_TOKEN"))
-import os
 import ccxt
 import pandas as pd
 import ta
