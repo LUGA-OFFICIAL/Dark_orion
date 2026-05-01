@@ -1,4 +1,4 @@
-import os, asyncio, json, time, math
+import os, asyncio, json, time, math, requests
 from collections import deque, defaultdict
 
 import pandas as pd
@@ -18,27 +18,21 @@ MAX_SYMBOLS = 30
 TOP_K = 3
 COOLDOWN_SEC = 1800
 
-# ================= اتصال =================
-ex = ccxt.binance({"enableRateLimit": True})
+# ================= Exchange (Bybit) =================
+exchange = ccxt.bybit({"enableRateLimit": True})
 
 klines = defaultdict(lambda: deque(maxlen=120))
 last_sent = {}
 
 # ================= AI =================
-def ai_score(features):
-    score = (
-        features["rsi"] +
-        features["macd"] +
-        features["trend"] +
-        features["volume"] +
-        features["momentum"]
-    )
-    prob = 1 / (1 + math.exp(-score))
+def ai_score(f):
+    s = f["rsi"] + f["macd"] + f["trend"] + f["volume"] + f["momentum"]
+    prob = 1 / (1 + math.exp(-s))
     return int(prob * 100)
 
-# ================= العملات =================
+# ================= جلب العملات =================
 def get_symbols():
-    tickers = ex.fetch_tickers()
+    tickers = exchange.fetch_tickers()
     pairs = []
 
     for s, d in tickers.items():
@@ -71,20 +65,16 @@ def analyze(symbol):
 
     price = r["c"]
 
-    # ===== Pump =====
     change = (r["c"] - prev["c"]) / prev["c"] * 100
     vol_spike = r["v"] > r["vma"] * 2 if pd.notna(r["vma"]) else False
     pump = change > 1.5 and vol_spike
 
-    # ===== Trend =====
     trend_up = r["ema50"] > r["ema200"]
     trend = "صاعد 📈" if trend_up else "هابط 📉"
 
-    # ===== Pullback =====
     recent_high = df["h"].rolling(10).max().iloc[-1]
     pullback = pump and price < recent_high * 0.995
 
-    # ===== AI =====
     features = {
         "rsi": 1 if r["rsi"] < 40 else -1,
         "macd": 1 if r["macd"] > r["macd_s"] else -1,
@@ -95,35 +85,28 @@ def analyze(symbol):
 
     ai = ai_score(features)
 
-    # ===== Signal =====
     if not (trend_up and pullback and r["macd"] > r["macd_s"] and ai >= 70):
         return None
 
-    # ===== TP / SL =====
-    entry = price
-    tp1 = price * 1.015
-    tp2 = price * 1.03
-    sl  = price * 0.97
-
     return {
         "symbol": symbol.upper(),
-        "signal": "شراء ذكي 🚀",
-        "trend": trend,
-        "entry": entry,
-        "tp1": tp1,
-        "tp2": tp2,
-        "sl": sl,
+        "entry": price,
+        "tp1": price * 1.015,
+        "tp2": price * 1.03,
+        "sl": price * 0.97,
         "ai": ai,
+        "trend": trend,
         "pump": pump
     }
 
 # ================= رسالة =================
 def build_msg(x):
     pump_text = "\n🚨 حركة قوية" if x["pump"] else ""
+
     return f"""━━━━━━━━━━━━━━━
 📊 {x['symbol']}
 
-🔥 {x['signal']}
+🔥 شراء ذكي 🚀
 📈 الاتجاه: {x['trend']}
 
 💰 الدخول:
@@ -162,43 +145,52 @@ async def send_top(app, signals):
         if sent >= TOP_K:
             break
 
-# ================= WebSocket =================
+# ================= WebSocket (Bybit) =================
 async def ws_loop(app):
     while True:
         try:
             symbols = get_symbols()
-            streams = "/".join([f"{s}@kline_1m" for s in symbols])
-            url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+            print("📊 Symbols loaded")
+
+            # Bybit public kline
+            streams = [f"kline.1.{s.upper()}" for s in symbols]
+
+            url = "wss://stream.bybit.com/v5/public/spot"
 
             async with websockets.connect(url) as ws:
                 print("🔥 WS CONNECTED")
+
+                # subscribe
+                await ws.send(json.dumps({
+                    "op": "subscribe",
+                    "args": streams
+                }))
 
                 buffer = []
 
                 async for msg in ws:
                     data = json.loads(msg)
-                    k = data.get("data", {}).get("k", {})
 
-                    if not k:
+                    if "data" not in data:
                         continue
 
-                    symbol = k["s"].lower()
+                    for k in data["data"]:
+                        symbol = k["symbol"].lower()
 
-                    t = k["t"]
-                    o = float(k["o"])
-                    h = float(k["h"])
-                    l = float(k["l"])
-                    c = float(k["c"])
-                    v = float(k["v"])
+                        t = k["start"]
+                        o = float(k["open"])
+                        h = float(k["high"])
+                        l = float(k["low"])
+                        c = float(k["close"])
+                        v = float(k["volume"])
 
-                    klines[symbol].append([t,o,h,l,c,v])
+                        klines[symbol].append([t,o,h,l,c,v])
 
-                    if k.get("x"):
                         res = analyze(symbol)
                         if res:
                             buffer.append(res)
 
-                    if len(buffer) >= 15:
+                    if len(buffer) >= 10:
                         await send_top(app, buffer)
                         buffer.clear()
 
@@ -210,8 +202,8 @@ async def ws_loop(app):
 def main():
     print("🚀 STARTING BOT...")
 
-    if not BOT_TOKEN:
-        raise ValueError("❌ BOT_TOKEN مش متضاف في Variables")
+    # حل مشكلة Telegram Conflict
+    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -221,7 +213,7 @@ def main():
 
     app.post_init = start
 
-    print("⚡ RUNNING POLLING...")
+    print("⚡ RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
