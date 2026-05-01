@@ -10,39 +10,20 @@ from telegram.ext import Application
 
 print("🔥 FILE STARTED")
 
-# ================= إعدادات =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
 
-MAX_SYMBOLS = 30
-TOP_K = 3
-COOLDOWN_SEC = 1800
-
-# ================= Exchange (Bybit) =================
 exchange = ccxt.bybit({"enableRateLimit": True})
 
 klines = defaultdict(lambda: deque(maxlen=120))
 last_sent = {}
 
-# ================= AI =================
+# ===== AI =====
 def ai_score(f):
-    s = f["rsi"] + f["macd"] + f["trend"] + f["volume"] + f["momentum"]
-    prob = 1 / (1 + math.exp(-s))
-    return int(prob * 100)
+    s = sum(f.values())
+    return int((1 / (1 + math.exp(-s))) * 100)
 
-# ================= جلب العملات =================
-def get_symbols():
-    tickers = exchange.fetch_tickers()
-    pairs = []
-
-    for s, d in tickers.items():
-        if "/USDT" in s and d.get("quoteVolume"):
-            pairs.append((s.replace("/", "").lower(), d["quoteVolume"]))
-
-    pairs.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in pairs[:MAX_SYMBOLS]]
-
-# ================= تحليل =================
+# ===== تحليل =====
 def analyze(symbol):
     data = list(klines[symbol])
     if len(data) < 60:
@@ -58,115 +39,71 @@ def analyze(symbol):
     df["ema50"] = ta.trend.EMAIndicator(df["c"], 50).ema_indicator()
     df["ema200"] = ta.trend.EMAIndicator(df["c"], 200).ema_indicator()
 
-    df["vma"] = df["v"].rolling(20).mean()
-
     r = df.iloc[-1]
     prev = df.iloc[-2]
 
     price = r["c"]
 
-    change = (r["c"] - prev["c"]) / prev["c"] * 100
-    vol_spike = r["v"] > r["vma"] * 2 if pd.notna(r["vma"]) else False
-    pump = change > 1.5 and vol_spike
-
-    trend_up = r["ema50"] > r["ema200"]
-    trend = "صاعد 📈" if trend_up else "هابط 📉"
-
-    recent_high = df["h"].rolling(10).max().iloc[-1]
-    pullback = pump and price < recent_high * 0.995
+    change = (price - prev["c"]) / prev["c"] * 100
 
     features = {
         "rsi": 1 if r["rsi"] < 40 else -1,
         "macd": 1 if r["macd"] > r["macd_s"] else -1,
-        "trend": 1 if trend_up else -1,
-        "volume": 1 if vol_spike else -1,
+        "trend": 1 if r["ema50"] > r["ema200"] else -1,
         "momentum": 1 if change > 0 else -1
     }
 
     ai = ai_score(features)
 
-    if not (trend_up and pullback and r["macd"] > r["macd_s"] and ai >= 70):
+    if ai < 70:
         return None
 
     return {
         "symbol": symbol.upper(),
         "entry": price,
-        "tp1": price * 1.015,
-        "tp2": price * 1.03,
+        "tp": price * 1.02,
         "sl": price * 0.97,
-        "ai": ai,
-        "trend": trend,
-        "pump": pump
+        "ai": ai
     }
 
-# ================= رسالة =================
+# ===== رسالة =====
 def build_msg(x):
-    pump_text = "\n🚨 حركة قوية" if x["pump"] else ""
-
-    return f"""━━━━━━━━━━━━━━━
+    return f"""
 📊 {x['symbol']}
 
-🔥 شراء ذكي 🚀
-📈 الاتجاه: {x['trend']}
+🚀 توصية شراء
 
-💰 الدخول:
-{x['entry']:.4f}
+💰 دخول: {x['entry']:.4f}
+🎯 هدف: {x['tp']:.4f}
+🛑 وقف: {x['sl']:.4f}
 
-🎯 الأهداف:
-➤ {x['tp1']:.4f}
-➤ {x['tp2']:.4f}
-
-🛑 وقف الخسارة:
-{x['sl']:.4f}
-
-━━━━━━━━━━━━━━━
-🧠 قوة الذكاء: {x['ai']}%{pump_text}
-
-━━━━━━━━━━━━━━━
-⚠️ إدارة رأس المال مهمة
+🧠 قوة: {x['ai']}%
 """
 
-# ================= إرسال =================
-async def send_top(app, signals):
-    signals.sort(key=lambda x: x["ai"], reverse=True)
-
+# ===== إرسال =====
+async def send_signal(app, s):
     now = time.time()
-    sent = 0
 
-    for s in signals:
-        if s["symbol"] in last_sent:
-            if now - last_sent[s["symbol"]] < COOLDOWN_SEC:
-                continue
+    if s["symbol"] in last_sent:
+        if now - last_sent[s["symbol"]] < 1800:
+            return
 
-        await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
-        last_sent[s["symbol"]] = now
+    await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
+    last_sent[s["symbol"]] = now
 
-        sent += 1
-        if sent >= TOP_K:
-            break
-
-# ================= WebSocket (Bybit) =================
+# ===== WebSocket =====
 async def ws_loop(app):
+    url = "wss://stream.bybit.com/v5/public/spot"
+
     while True:
         try:
-            symbols = get_symbols()
-            print("📊 Symbols loaded")
-
-            # Bybit public kline
-            streams = [f"kline.1.{s.upper()}" for s in symbols]
-
-            url = "wss://stream.bybit.com/v5/public/spot"
-
             async with websockets.connect(url) as ws:
                 print("🔥 WS CONNECTED")
 
-                # subscribe
                 await ws.send(json.dumps({
                     "op": "subscribe",
-                    "args": streams
+                    "args": ["kline.1.BTCUSDT","kline.1.ETHUSDT","kline.1.SOLUSDT"]
                 }))
-
-                buffer = []
 
                 async for msg in ws:
                     data = json.loads(msg)
@@ -177,32 +114,28 @@ async def ws_loop(app):
                     for k in data["data"]:
                         symbol = k["symbol"].lower()
 
-                        t = k["start"]
-                        o = float(k["open"])
-                        h = float(k["high"])
-                        l = float(k["low"])
-                        c = float(k["close"])
-                        v = float(k["volume"])
-
-                        klines[symbol].append([t,o,h,l,c,v])
+                        klines[symbol].append([
+                            k["start"],
+                            float(k["open"]),
+                            float(k["high"]),
+                            float(k["low"]),
+                            float(k["close"]),
+                            float(k["volume"])
+                        ])
 
                         res = analyze(symbol)
                         if res:
-                            buffer.append(res)
-
-                    if len(buffer) >= 10:
-                        await send_top(app, buffer)
-                        buffer.clear()
+                            await send_signal(app, res)
 
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-# ================= تشغيل =================
+# ===== تشغيل =====
 def main():
     print("🚀 STARTING BOT...")
 
-    # حل مشكلة Telegram Conflict
+    # حل conflict نهائي
     requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -213,7 +146,6 @@ def main():
 
     app.post_init = start
 
-    print("⚡ RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
