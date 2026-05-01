@@ -8,7 +8,6 @@ from collections import defaultdict, deque
 import pandas as pd
 import ta
 import websockets
-
 from telegram.ext import Application
 
 print("🚨 BOT IS RUNNING NOW")
@@ -77,10 +76,8 @@ def build_msg(s):
 # ================= SEND =================
 async def send_signal(app, s):
     now = time.time()
-
-    if s["symbol"] in last_sent:
-        if now - last_sent[s["symbol"]] < 1800:
-            return
+    if s["symbol"] in last_sent and now - last_sent[s["symbol"]] < 1800:
+        return
 
     await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
     last_sent[s["symbol"]] = now
@@ -96,10 +93,7 @@ async def ws_loop(app):
 
                 await ws.send(json.dumps({
                     "op": "subscribe",
-                    "args": [
-                        "kline.1.BTCUSDT",
-                        "kline.1.ETHUSDT"
-                    ]
+                    "args": ["kline.1.BTCUSDT", "kline.1.ETHUSDT"]
                 }))
 
                 async for msg in ws:
@@ -138,28 +132,28 @@ async def ws_loop(app):
 
 # ================= MAIN =================
 def main():
+    print("🚀 STARTING BOT...")
+
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.ws_task = None
-
-    async def on_startup(app):
+    async def start(app):
         print("🔥 BOT STARTED")
         app.ws_task = asyncio.create_task(ws_loop(app))
 
-    async def on_shutdown(app):
+    async def shutdown(app):
         print("🛑 SHUTDOWN...")
-        if app.ws_task:
+        if hasattr(app, "ws_task"):
             app.ws_task.cancel()
             try:
                 await app.ws_task
-            except asyncio.CancelledError:
+            except:
                 pass
 
-    app.post_init = on_startup
-    app.post_shutdown = on_shutdown
+    app.post_init = start
+    app.post_shutdown = shutdown
 
     print("⚡ RUNNING POLLING...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
