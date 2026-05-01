@@ -1,5 +1,10 @@
-import os, asyncio, json, time, math, requests
-from collections import deque, defaultdict
+import os
+import asyncio
+import json
+import time
+import math
+import requests
+from collections import defaultdict, deque
 
 import pandas as pd
 import ta
@@ -10,23 +15,24 @@ from telegram.ext import Application
 
 print("🔥 FILE STARTED")
 
+# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
+CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
 exchange = ccxt.bybit({"enableRateLimit": True})
 
 klines = defaultdict(lambda: deque(maxlen=120))
 last_sent = {}
 
-# ===== AI =====
+# ================= AI =================
 def ai_score(f):
-    s = sum(f.values())
-    return int((1 / (1 + math.exp(-s))) * 100)
+    score = sum(f.values())
+    return int((1 / (1 + math.exp(-score))) * 100)
 
-# ===== تحليل =====
+# ================= ANALYSIS =================
 def analyze(symbol):
     data = list(klines[symbol])
-    if len(data) < 60:
+    if len(data) < 50:
         return None
 
     df = pd.DataFrame(data, columns=["t","o","h","l","c","v"])
@@ -43,7 +49,6 @@ def analyze(symbol):
     prev = df.iloc[-2]
 
     price = r["c"]
-
     change = (price - prev["c"]) / prev["c"] * 100
 
     features = {
@@ -66,21 +71,23 @@ def analyze(symbol):
         "ai": ai
     }
 
-# ===== رسالة =====
-def build_msg(x):
+# ================= MESSAGE =================
+def build_msg(s):
     return f"""
-📊 {x['symbol']}
+━━━━━━━━━━━━━━━
+📊 {s['symbol']}
 
 🚀 توصية شراء
 
-💰 دخول: {x['entry']:.4f}
-🎯 هدف: {x['tp']:.4f}
-🛑 وقف: {x['sl']:.4f}
+💰 دخول: {s['entry']:.4f}
+🎯 هدف: {s['tp']:.4f}
+🛑 وقف: {s['sl']:.4f}
 
-🧠 قوة: {x['ai']}%
+🧠 قوة: {s['ai']}%
+━━━━━━━━━━━━━━━
 """
 
-# ===== إرسال =====
+# ================= SEND =================
 async def send_signal(app, s):
     now = time.time()
 
@@ -91,7 +98,7 @@ async def send_signal(app, s):
     await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
     last_sent[s["symbol"]] = now
 
-# ===== WebSocket =====
+# ================= WS =================
 async def ws_loop(app):
     url = "wss://stream.bybit.com/v5/public/spot"
 
@@ -102,7 +109,7 @@ async def ws_loop(app):
 
                 await ws.send(json.dumps({
                     "op": "subscribe",
-                    "args": ["kline.1.BTCUSDT","kline.1.ETHUSDT","kline.1.SOLUSDT"]
+                    "args": ["kline.1.BTCUSDT", "kline.1.ETHUSDT", "kline.1.SOLUSDT"]
                 }))
 
                 async for msg in ws:
@@ -123,15 +130,15 @@ async def ws_loop(app):
                             float(k["volume"])
                         ])
 
-                        res = analyze(symbol)
-                        if res:
-                            await send_signal(app, res)
+                        result = analyze(symbol)
+                        if result:
+                            await send_signal(app, result)
 
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-# ===== تشغيل =====
+# ================= MAIN =================
 def main():
     print("🚀 STARTING BOT...")
 
