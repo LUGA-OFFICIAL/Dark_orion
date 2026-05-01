@@ -1,20 +1,19 @@
-from telegram.ext import Updater, CommandHandler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import os
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-def start(update, context):
-    update.message.reply_text("🔥 شغال")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 البوت اشتغل أخيراً")
 
 def main():
-    updater = Updater(BOT_TOKEN)  # ❌ حذف use_context
-    dp = updater.dispatcher
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", start))
 
-    print("🔥 RUNNING CLEAN")
-    updater.start_polling()
-    updater.idle()
+    print("🔥 RUNNING MODERN BOT")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
