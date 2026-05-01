@@ -1,4 +1,3 @@
-print("🚨 BOT IS RUNNING NOW")
 import os
 import asyncio
 import json
@@ -14,6 +13,7 @@ import ccxt
 
 from telegram.ext import Application
 
+print("🚨 BOT IS RUNNING NOW")
 print("🔥 FILE STARTED")
 
 # ================= CONFIG =================
@@ -21,7 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
 APP_URL = "https://worker-production-5ac8.up.railway.app"
-PORT = int(os.getenv("PORT", 8080))
+PORT = int(os.getenv("PORT", 8000))
 
 exchange = ccxt.bybit({"enableRateLimit": True})
 
@@ -108,7 +108,12 @@ async def ws_loop(app):
 
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20
+            ) as ws:
+
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -126,21 +131,29 @@ async def ws_loop(app):
                     if "data" not in data:
                         continue
 
-                    for k in data["data"]:
-                        symbol = k["symbol"].lower()
+                    for k in data.get("data", []):
+                        try:
+                            symbol = k.get("symbol")
+                            if not symbol:
+                                continue
 
-                        klines[symbol].append([
-                            k["start"],
-                            float(k["open"]),
-                            float(k["high"]),
-                            float(k["low"]),
-                            float(k["close"]),
-                            float(k["volume"])
-                        ])
+                            symbol = symbol.lower()
 
-                        result = analyze(symbol)
-                        if result:
-                            await send_signal(app, result)
+                            klines[symbol].append([
+                                k.get("start"),
+                                float(k.get("open", 0)),
+                                float(k.get("high", 0)),
+                                float(k.get("low", 0)),
+                                float(k.get("close", 0)),
+                                float(k.get("volume", 0))
+                            ])
+
+                            result = analyze(symbol)
+                            if result:
+                                await send_signal(app, result)
+
+                        except Exception as e:
+                            print("PARSE ERROR:", e)
 
         except Exception as e:
             print("WS ERROR:", e)
@@ -150,7 +163,7 @@ async def ws_loop(app):
 def main():
     print("🚀 STARTING BOT...")
 
-    # تنظيف أي webhook قديم
+    # حذف webhook قديم
     requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
 
     app = Application.builder().token(BOT_TOKEN).build()
