@@ -8,6 +8,8 @@ import ccxt
 
 from telegram.ext import Application
 
+print("🔥 FILE STARTED")
+
 # ================= إعدادات =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
@@ -71,7 +73,7 @@ def analyze(symbol):
 
     # ===== Pump =====
     change = (r["c"] - prev["c"]) / prev["c"] * 100
-    vol_spike = r["v"] > r["vma"] * 2
+    vol_spike = r["v"] > r["vma"] * 2 if pd.notna(r["vma"]) else False
     pump = change > 1.5 and vol_spike
 
     # ===== Trend =====
@@ -94,12 +96,7 @@ def analyze(symbol):
     ai = ai_score(features)
 
     # ===== Signal =====
-    signal = None
-
-    if trend_up and pullback and r["macd"] > r["macd_s"]:
-        signal = "شراء ذكي 🚀"
-
-    if not signal or ai < 70:
+    if not (trend_up and pullback and r["macd"] > r["macd_s"] and ai >= 70):
         return None
 
     # ===== TP / SL =====
@@ -110,7 +107,7 @@ def analyze(symbol):
 
     return {
         "symbol": symbol.upper(),
-        "signal": signal,
+        "signal": "شراء ذكي 🚀",
         "trend": trend,
         "entry": entry,
         "tp1": tp1,
@@ -123,7 +120,6 @@ def analyze(symbol):
 # ================= رسالة =================
 def build_msg(x):
     pump_text = "\n🚨 حركة قوية" if x["pump"] else ""
-
     return f"""━━━━━━━━━━━━━━━
 📊 {x['symbol']}
 
@@ -172,7 +168,6 @@ async def ws_loop(app):
         try:
             symbols = get_symbols()
             streams = "/".join([f"{s}@kline_1m" for s in symbols])
-
             url = f"wss://stream.binance.com:9443/stream?streams={streams}"
 
             async with websockets.connect(url) as ws:
@@ -213,14 +208,20 @@ async def ws_loop(app):
 
 # ================= تشغيل =================
 def main():
+    print("🚀 STARTING BOT...")
+
+    if not BOT_TOKEN:
+        raise ValueError("❌ BOT_TOKEN مش متضاف في Variables")
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     async def start(app):
-        print("🚀 BOT STARTED")
+        print("🔥 BOT STARTED")
         asyncio.create_task(ws_loop(app))
 
     app.post_init = start
 
+    print("⚡ RUNNING POLLING...")
     app.run_polling()
 
 if __name__ == "__main__":
