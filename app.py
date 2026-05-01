@@ -2,7 +2,6 @@ import os
 import asyncio
 import json
 import time
-import traceback
 from collections import defaultdict, deque
 
 import pandas as pd
@@ -47,13 +46,10 @@ def analyze(symbol):
 
         r = df1.iloc[-1]
         prev = df1.iloc[-2]
-
         price = r["c"]
 
         breakout = price > df1["h"].rolling(20).max().iloc[-2]
-
         vol_spike = r["v"] > df1["v"].rolling(20).mean().iloc[-2] * 1.8
-
         momentum = r["rsi"] > 52 and price > prev["c"]
 
         score = 0
@@ -95,6 +91,10 @@ def build_msg(s):
 🎯 TP2: {s['tp2']:.4f}
 
 🛑 SL: {s['sl']:.4f}
+
+📌 عند TP1:
+- اقفل 50%
+- حرّك الوقف لنقطة الدخول
 
 🧠 Score: {s['score']}%
 ━━━━━━━━━━━━━━━
@@ -167,7 +167,6 @@ async def ws_loop(app):
                             if result:
                                 await send_signal(app, result)
 
-                            # متابعة TP1
                             trade = open_trades.get(symbol.upper())
                             if trade:
                                 price = float(k.get("close", 0))
@@ -188,39 +187,30 @@ async def ws_loop(app):
 
 
 # ================= MAIN =================
-async def main():
+def main():
     print("🚀 STARTING BOT...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    await app.initialize()
-    await app.start()
+    async def on_startup(app):
+        print("🔥 BOT STARTED")
+        app.ws_task = asyncio.create_task(ws_loop(app))
 
-    print("🔥 BOT STARTED")
-
-    ws_task = asyncio.create_task(ws_loop(app))
-
-    try:
-        print("⚡ RUNNING POLLING...")
-        await app.run_polling(drop_pending_updates=True)
-
-    except Exception as e:
-        print("💥 POLLING ERROR:", e)
-        traceback.print_exc()
-
-    finally:
+    async def on_shutdown(app):
         print("🛑 SHUTDOWN...")
+        if hasattr(app, "ws_task"):
+            app.ws_task.cancel()
+            try:
+                await app.ws_task
+            except:
+                pass
 
-        ws_task.cancel()
-        try:
-            await ws_task
-        except:
-            pass
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
 
-        await app.stop()
-        await app.shutdown()
+    print("⚡ RUNNING POLLING...")
+    app.run_polling(drop_pending_updates=True)
 
 
-# ================= RUN =================
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
