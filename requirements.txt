@@ -1,7 +1,4 @@
-python-telegram-bot[webhooks]==20.7
-ccxt
+python-telegram-bot==20.7
+websockets
 pandas
 ta
-aiohttp
-feedparser
-websockets
