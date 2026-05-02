@@ -19,7 +19,7 @@ def analyze(symbol):
         k1 = list(klines[f"{symbol}_1"])
         k5 = list(klines[f"{symbol}_5"])
 
-        if len(k1) < 80 or len(k5) < 80:
+        if len(k1) < 50 or len(k5) < 50:
             return None
 
         df1 = pd.DataFrame(k1, columns=["t","o","h","l","c","v"])
@@ -30,9 +30,7 @@ def analyze(symbol):
 
         trend = df5.iloc[-1]["ema50"] > df5.iloc[-1]["ema200"]
 
-        r = df1.iloc[-1]
-        price = r["c"]
-
+        price = df1.iloc[-1]["c"]
         breakout = price > df1["h"].rolling(20).max().iloc[-2]
 
         if not (trend and breakout):
@@ -43,7 +41,8 @@ def analyze(symbol):
             "entry": price
         }
 
-    except:
+    except Exception as e:
+        print("ANALYZE ERROR:", e)
         return None
 
 # ================= WS =================
@@ -73,7 +72,14 @@ async def ws_loop(app):
                     tf = "1" if ".1." in topic else "5"
 
                     for k in data["data"]:
-                        symbol = k.get("symbol").lower()
+                        symbol = k.get("symbol")
+
+                        # 🔥 الحل هنا
+                        if not symbol:
+                            continue
+
+                        symbol = symbol.lower()
+
                         key = f"{symbol}_{tf}"
 
                         klines[key].append([
