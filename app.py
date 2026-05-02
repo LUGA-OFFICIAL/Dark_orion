@@ -18,7 +18,7 @@ klines = defaultdict(lambda: deque(maxlen=200))
 last_sent = {}
 open_trades = {}
 
-# ====== Queue للإرسال ======
+# Queue للإرسال
 send_queue = asyncio.Queue()
 
 # ================= ANALYSIS =================
@@ -33,7 +33,7 @@ def analyze(symbol):
         df1 = pd.DataFrame(k1, columns=["t","o","h","l","c","v"])
         df5 = pd.DataFrame(k5, columns=["t","o","h","l","c","v"])
 
-        # سيولة
+        # فلتر سيولة
         vol_usd = (df1["c"] * df1["v"]).rolling(30).mean().iloc[-1]
         if vol_usd < 1_000_000:
             return None
@@ -79,6 +79,7 @@ def analyze(symbol):
         print("ANALYZE ERROR:", e)
         return None
 
+
 # ================= MESSAGE =================
 def build_msg(s):
     return f"""
@@ -94,17 +95,21 @@ def build_msg(s):
 
 🛑 SL: {s['sl']:.4f}
 
+📌 عند TP1:
+- اقفل 50%
+- حرّك الوقف لنقطة الدخول
+
 🧠 Score: {s['score']}%
 ━━━━━━━━━━━━━━━
 """
 
-# ================= QUEUE SEND =================
+
+# ================= QUEUE =================
 async def enqueue_message(text):
     await send_queue.put(text)
 
 async def sender_worker(app):
     print("📡 SENDER WORKER STARTED")
-    backoff = 2
 
     while True:
         msg = await send_queue.get()
@@ -112,15 +117,13 @@ async def sender_worker(app):
         while True:
             try:
                 await app.bot.send_message(chat_id=CHAT_ID, text=msg)
-                backoff = 2
                 break
-
             except Exception as e:
                 print("⚠️ SEND FAILED:", e)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                await asyncio.sleep(5)
 
         send_queue.task_done()
+
 
 # ================= SEND =================
 async def send_signal(app, s):
@@ -130,11 +133,11 @@ async def send_signal(app, s):
         if now - last_sent[s["symbol"]] < 3600:
             return
 
-    msg = build_msg(s)
-    await enqueue_message(msg)
+    await enqueue_message(build_msg(s))
 
     last_sent[s["symbol"]] = now
     open_trades[s["symbol"]] = {"tp1": s["tp1"]}
+
 
 # ================= WS =================
 async def ws_loop(app):
@@ -198,9 +201,13 @@ async def ws_loop(app):
                                     )
                                     del open_trades[symbol.upper()]
 
+        except asyncio.CancelledError:
+            return
+
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
+
 
 # ================= MAIN =================
 def main():
@@ -230,13 +237,9 @@ def main():
     app.post_shutdown = on_shutdown
 
     print("⚡ RUNNING POLLING...")
+    app.run_polling(drop_pending_updates=True)
 
-    while True:
-        try:
-            app.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            print("💥 POLLING ERROR:", e)
-            time.sleep(5)
 
+# ================= RUN =================
 if __name__ == "__main__":
     main()
