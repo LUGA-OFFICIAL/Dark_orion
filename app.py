@@ -13,11 +13,10 @@ print("🚨 BOT FILE LOADED")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
-
-# 👇 ضع رابط Railway بتاعك هنا (بدون / في الآخر)
-APP_URL = os.getenv("APP_URL")  # مثال: https://your-app.up.railway.app
+APP_URL = os.getenv("APP_URL")  # https://your-app.up.railway.app
 
 klines = defaultdict(lambda: deque(maxlen=200))
+
 
 # ================= ANALYSIS =================
 def analyze(symbol):
@@ -47,17 +46,14 @@ def analyze(symbol):
         print("ANALYZE ERROR:", e)
         return None
 
+
 # ================= WS =================
 async def ws_loop(app, stop_event):
     url = "wss://stream.bybit.com/v5/public/spot"
 
     while not stop_event.is_set():
         try:
-            async with websockets.connect(
-                url,
-                ping_interval=20,
-                ping_timeout=20
-            ) as ws:
+            async with websockets.connect(url, ping_interval=20) as ws:
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -108,10 +104,9 @@ async def ws_loop(app, stop_event):
             print("🛑 WS STOPPED")
             return
         except Exception as e:
-            if stop_event.is_set():
-                return
             print("WS ERROR:", e)
             await asyncio.sleep(5)
+
 
 # ================= MAIN =================
 def main():
@@ -138,7 +133,8 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
-    # 👇 تشغيل Webhook (بدون polling نهائيًا)
+    print("⚡ RUNNING WEBHOOK...")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -146,6 +142,7 @@ def main():
         webhook_url=f"{APP_URL}/{BOT_TOKEN}",
         drop_pending_updates=True,
     )
+
 
 if __name__ == "__main__":
     main()
