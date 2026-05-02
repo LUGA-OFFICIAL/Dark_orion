@@ -1,3 +1,4 @@
+print("🔥🔥🔥 RUNNING NOW 🔥🔥🔥")
 import os
 import asyncio
 import json
