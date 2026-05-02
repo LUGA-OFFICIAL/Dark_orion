@@ -18,7 +18,6 @@ PORT      = int(os.getenv("PORT", "8080"))
 klines = defaultdict(lambda: deque(maxlen=200))
 
 # ================= HEALTH CHECK =================
-# Railway محتاج endpoint يرد عليه عشان ما يعتبر البوت crash
 async def health(request):
     return web.Response(text="OK")
 
@@ -53,7 +52,10 @@ def analyze(symbol):
         if not (trend and breakout):
             return None
 
-        return {"symbol": symbol.upper(), "entry": price}
+        return {
+            "symbol": symbol.upper(),
+            "entry": price
+        }
 
     except Exception as e:
         print("ANALYZE ERROR:", e)
@@ -66,8 +68,11 @@ async def ws_loop(bot):
     while True:
         try:
             async with websockets.connect(
-                url, ping_interval=20, ping_timeout=30
+                url,
+                ping_interval=20,
+                ping_timeout=30
             ) as ws:
+
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -81,16 +86,19 @@ async def ws_loop(bot):
 
                 async for msg in ws:
                     data = json.loads(msg)
+
                     if "data" not in data:
                         continue
 
-                    topic  = data.get("topic", "")
-                    tf     = "1" if ".1." in topic else "5"
+                    topic = data.get("topic", "")
+                    tf    = "1" if ".1." in topic else "5"
 
                     for k in data["data"]:
-                        symbol = k.get("symbol", "").lower()
+                        symbol = k.get("symbol")
                         if not symbol:
                             continue
+
+                        symbol = symbol.lower()
 
                         klines[f"{symbol}_{tf}"].append([
                             k.get("start"),
@@ -108,9 +116,9 @@ async def ws_loop(bot):
                                     chat_id=CHAT_ID,
                                     text=(
                                         f"🚀 *{res['symbol']}* BUY\n"
-                                        f"💰 سعر الدخول: `{res['entry']:.4f}`"
+                                        f"💰 Entry: `{res['entry']:.4f}`"
                                     ),
-                                    parse_mode="Markdown",
+                                    parse_mode="Markdown"
                                 )
 
         except Exception as e:
@@ -119,22 +127,27 @@ async def ws_loop(bot):
 
 # ================= MAIN =================
 async def main():
-    # Health check server أولاً عشان Railway ما يوقف البوت
+    # Health server (مهم لـ Railway)
     await start_health_server()
 
-    # تشغيل البوت
+    # Telegram bot
     app = Application.builder().token(BOT_TOKEN).build()
     await app.initialize()
     await app.start()
 
     print("✅ البوت يعمل!")
+
     await app.bot.send_message(
         chat_id=CHAT_ID,
         text="✅ البوت يعمل ويراقب السوق!"
     )
 
-    # تشغيل الـ WebSocket
-    await ws_loop(app.bot)
+    # WebSocket كـ background task
+    asyncio.create_task(ws_loop(app.bot))
 
+    # خليه شغال دائمًا
+    await asyncio.Event().wait()
+
+# ================= RUN =================
 if __name__ == "__main__":
     asyncio.run(main())
