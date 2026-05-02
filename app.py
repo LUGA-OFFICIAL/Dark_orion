@@ -1,7 +1,9 @@
 import os
+import sys
 import asyncio
 import json
 import time
+import tempfile
 from collections import defaultdict, deque
 
 import pandas as pd
@@ -14,11 +16,36 @@ print("🚨 BOT FILE LOADED")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
+# ================= SINGLE INSTANCE LOCK =================
+LOCK_PATH = os.path.join(tempfile.gettempdir(), "tg_bot.lock")
+
+def acquire_lock():
+    try:
+        if os.path.exists(LOCK_PATH):
+            print("⛔ Bot already running (lock file exists). Exiting.")
+            sys.exit(0)
+
+        with open(LOCK_PATH, "w") as f:
+            f.write(str(os.getpid()))
+
+        print("🔒 Lock acquired")
+
+    except Exception as e:
+        print("LOCK ERROR:", e)
+        sys.exit(1)
+
+def release_lock():
+    try:
+        if os.path.exists(LOCK_PATH):
+            os.remove(LOCK_PATH)
+            print("🔓 Lock released")
+    except:
+        pass
+
+# ================= DATA =================
 klines = defaultdict(lambda: deque(maxlen=200))
 last_sent = {}
 open_trades = {}
-
-# Queue للإرسال
 send_queue = asyncio.Queue()
 
 # ================= ANALYSIS =================
@@ -33,17 +60,14 @@ def analyze(symbol):
         df1 = pd.DataFrame(k1, columns=["t","o","h","l","c","v"])
         df5 = pd.DataFrame(k5, columns=["t","o","h","l","c","v"])
 
-        # فلتر سيولة
         vol_usd = (df1["c"] * df1["v"]).rolling(30).mean().iloc[-1]
         if vol_usd < 1_000_000:
             return None
 
-        # ترند
         df5["ema50"] = ta.trend.EMAIndicator(df5["c"], 50).ema_indicator()
         df5["ema200"] = ta.trend.EMAIndicator(df5["c"], 200).ema_indicator()
         trend = df5.iloc[-1]["ema50"] > df5.iloc[-1]["ema200"]
 
-        # زخم
         df1["rsi"] = ta.momentum.RSIIndicator(df1["c"]).rsi()
         df1["atr"] = ta.volatility.AverageTrueRange(df1["h"], df1["l"], df1["c"]).average_true_range()
 
@@ -79,65 +103,36 @@ def analyze(symbol):
         print("ANALYZE ERROR:", e)
         return None
 
-
 # ================= MESSAGE =================
 def build_msg(s):
     return f"""
-━━━━━━━━━━━━━━━
 📊 {s['symbol']}
-
-🔥 Smart Signal
+🚀 Smart Signal
 
 💰 Entry: {s['entry']:.4f}
-
 🎯 TP1: {s['tp1']:.4f}
 🎯 TP2: {s['tp2']:.4f}
-
 🛑 SL: {s['sl']:.4f}
 
-📌 عند TP1:
-- اقفل 50%
-- حرّك الوقف لنقطة الدخول
-
 🧠 Score: {s['score']}%
-━━━━━━━━━━━━━━━
 """
-
 
 # ================= QUEUE =================
 async def enqueue_message(text):
     await send_queue.put(text)
 
 async def sender_worker(app):
-    print("📡 SENDER WORKER STARTED")
-
+    print("📡 Sender started")
     while True:
         msg = await send_queue.get()
-
         while True:
             try:
                 await app.bot.send_message(chat_id=CHAT_ID, text=msg)
                 break
             except Exception as e:
-                print("⚠️ SEND FAILED:", e)
+                print("SEND FAIL:", e)
                 await asyncio.sleep(5)
-
         send_queue.task_done()
-
-
-# ================= SEND =================
-async def send_signal(app, s):
-    now = time.time()
-
-    if s["symbol"] in last_sent:
-        if now - last_sent[s["symbol"]] < 3600:
-            return
-
-    await enqueue_message(build_msg(s))
-
-    last_sent[s["symbol"]] = now
-    open_trades[s["symbol"]] = {"tp1": s["tp1"]}
-
 
 # ================= WS =================
 async def ws_loop(app):
@@ -145,12 +140,7 @@ async def ws_loop(app):
 
     while True:
         try:
-            async with websockets.connect(
-                url,
-                ping_interval=20,
-                ping_timeout=20
-            ) as ws:
-
+            async with websockets.connect(url) as ws:
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -163,7 +153,6 @@ async def ws_loop(app):
 
                 async for msg in ws:
                     data = json.loads(msg)
-
                     if "data" not in data:
                         continue
 
@@ -171,11 +160,7 @@ async def ws_loop(app):
                     tf = "1" if ".1." in topic else "5"
 
                     for k in data["data"]:
-                        symbol = k.get("symbol")
-                        if not symbol:
-                            continue
-
-                        symbol = symbol.lower()
+                        symbol = k.get("symbol").lower()
                         key = f"{symbol}_{tf}"
 
                         klines[key].append([
@@ -188,58 +173,33 @@ async def ws_loop(app):
                         ])
 
                         if tf == "1":
-                            result = analyze(symbol)
-                            if result:
-                                await send_signal(app, result)
-
-                            trade = open_trades.get(symbol.upper())
-                            if trade:
-                                price = float(k.get("close", 0))
-                                if price >= trade["tp1"]:
-                                    await enqueue_message(
-                                        f"📈 {symbol.upper()} وصل TP1 — حرّك الوقف لنقطة الدخول"
-                                    )
-                                    del open_trades[symbol.upper()]
-
-        except asyncio.CancelledError:
-            return
+                            res = analyze(symbol)
+                            if res:
+                                await enqueue_message(build_msg(res))
 
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
-
 # ================= MAIN =================
 def main():
-    print("🚀 STARTING BOT...")
+    acquire_lock()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    async def on_startup(app):
-        print("🔥 BOT STARTED")
-
+    async def startup(app):
         app.ws_task = asyncio.create_task(ws_loop(app))
         app.sender_task = asyncio.create_task(sender_worker(app))
+        print("🔥 BOT STARTED")
 
-    async def on_shutdown(app):
+    async def shutdown(app):
+        release_lock()
         print("🛑 SHUTDOWN...")
 
-        for t in ["ws_task", "sender_task"]:
-            task = getattr(app, t, None)
-            if task:
-                task.cancel()
-                try:
-                    await task
-                except:
-                    pass
+    app.post_init = startup
+    app.post_shutdown = shutdown
 
-    app.post_init = on_startup
-    app.post_shutdown = on_shutdown
-
-    print("⚡ RUNNING POLLING...")
     app.run_polling(drop_pending_updates=True)
 
-
-# ================= RUN =================
 if __name__ == "__main__":
     main()
