@@ -18,6 +18,9 @@ klines = defaultdict(lambda: deque(maxlen=200))
 last_sent = {}
 open_trades = {}
 
+# ====== Queue للإرسال ======
+send_queue = asyncio.Queue()
+
 # ================= ANALYSIS =================
 def analyze(symbol):
     try:
@@ -76,7 +79,6 @@ def analyze(symbol):
         print("ANALYZE ERROR:", e)
         return None
 
-
 # ================= MESSAGE =================
 def build_msg(s):
     return f"""
@@ -92,32 +94,47 @@ def build_msg(s):
 
 🛑 SL: {s['sl']:.4f}
 
-📌 عند TP1:
-- اقفل 50%
-- حرّك الوقف لنقطة الدخول
-
 🧠 Score: {s['score']}%
 ━━━━━━━━━━━━━━━
 """
 
+# ================= QUEUE SEND =================
+async def enqueue_message(text):
+    await send_queue.put(text)
+
+async def sender_worker(app):
+    print("📡 SENDER WORKER STARTED")
+    backoff = 2
+
+    while True:
+        msg = await send_queue.get()
+
+        while True:
+            try:
+                await app.bot.send_message(chat_id=CHAT_ID, text=msg)
+                backoff = 2
+                break
+
+            except Exception as e:
+                print("⚠️ SEND FAILED:", e)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+        send_queue.task_done()
 
 # ================= SEND =================
 async def send_signal(app, s):
-    try:
-        now = time.time()
+    now = time.time()
 
-        if s["symbol"] in last_sent:
-            if now - last_sent[s["symbol"]] < 3600:
-                return
+    if s["symbol"] in last_sent:
+        if now - last_sent[s["symbol"]] < 3600:
+            return
 
-        await app.bot.send_message(chat_id=CHAT_ID, text=build_msg(s))
+    msg = build_msg(s)
+    await enqueue_message(msg)
 
-        last_sent[s["symbol"]] = now
-        open_trades[s["symbol"]] = {"tp1": s["tp1"]}
-
-    except Exception as e:
-        print("SEND ERROR:", e)
-
+    last_sent[s["symbol"]] = now
+    open_trades[s["symbol"]] = {"tp1": s["tp1"]}
 
 # ================= WS =================
 async def ws_loop(app):
@@ -125,7 +142,12 @@ async def ws_loop(app):
 
     while True:
         try:
-            async with websockets.connect(url, ping_interval=20) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20
+            ) as ws:
+
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -171,20 +193,14 @@ async def ws_loop(app):
                             if trade:
                                 price = float(k.get("close", 0))
                                 if price >= trade["tp1"]:
-                                    await app.bot.send_message(
-                                        chat_id=CHAT_ID,
-                                        text=f"📈 {symbol.upper()} وصل TP1 — حرّك الوقف لنقطة الدخول"
+                                    await enqueue_message(
+                                        f"📈 {symbol.upper()} وصل TP1 — حرّك الوقف لنقطة الدخول"
                                     )
                                     del open_trades[symbol.upper()]
-
-        except asyncio.CancelledError:
-            print("🛑 WS STOPPED")
-            return
 
         except Exception as e:
             print("WS ERROR:", e)
             await asyncio.sleep(5)
-
 
 # ================= MAIN =================
 def main():
@@ -194,23 +210,33 @@ def main():
 
     async def on_startup(app):
         print("🔥 BOT STARTED")
+
         app.ws_task = asyncio.create_task(ws_loop(app))
+        app.sender_task = asyncio.create_task(sender_worker(app))
 
     async def on_shutdown(app):
         print("🛑 SHUTDOWN...")
-        if hasattr(app, "ws_task"):
-            app.ws_task.cancel()
-            try:
-                await app.ws_task
-            except:
-                pass
+
+        for t in ["ws_task", "sender_task"]:
+            task = getattr(app, t, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except:
+                    pass
 
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
     print("⚡ RUNNING POLLING...")
-    app.run_polling(drop_pending_updates=True)
 
+    while True:
+        try:
+            app.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            print("💥 POLLING ERROR:", e)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
