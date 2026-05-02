@@ -8,8 +8,14 @@ import ta
 import websockets
 from telegram.ext import Application
 
+print("🚨 BOT FILE LOADED")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+PORT = int(os.getenv("PORT", "8080"))
+
+# 👇 ضع رابط Railway بتاعك هنا (بدون / في الآخر)
+APP_URL = os.getenv("APP_URL")  # مثال: https://your-app.up.railway.app
 
 klines = defaultdict(lambda: deque(maxlen=200))
 
@@ -29,17 +35,13 @@ def analyze(symbol):
         df5["ema200"] = ta.trend.EMAIndicator(df5["c"], 200).ema_indicator()
 
         trend = df5.iloc[-1]["ema50"] > df5.iloc[-1]["ema200"]
-
         price = df1.iloc[-1]["c"]
         breakout = price > df1["h"].rolling(20).max().iloc[-2]
 
         if not (trend and breakout):
             return None
 
-        return {
-            "symbol": symbol.upper(),
-            "entry": price
-        }
+        return {"symbol": symbol.upper(), "entry": price}
 
     except Exception as e:
         print("ANALYZE ERROR:", e)
@@ -56,7 +58,6 @@ async def ws_loop(app, stop_event):
                 ping_interval=20,
                 ping_timeout=20
             ) as ws:
-
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -72,7 +73,6 @@ async def ws_loop(app, stop_event):
                         break
 
                     data = json.loads(msg)
-
                     if "data" not in data:
                         continue
 
@@ -81,7 +81,6 @@ async def ws_loop(app, stop_event):
 
                     for k in data["data"]:
                         symbol = k.get("symbol")
-
                         if not symbol:
                             continue
 
@@ -108,28 +107,27 @@ async def ws_loop(app, stop_event):
         except asyncio.CancelledError:
             print("🛑 WS STOPPED")
             return
-
         except Exception as e:
             if stop_event.is_set():
                 return
-
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
 # ================= MAIN =================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    if not APP_URL:
+        raise RuntimeError("APP_URL env is required")
 
+    app = Application.builder().token(BOT_TOKEN).build()
     stop_event = asyncio.Event()
 
-    async def startup(app):
+    async def on_startup(app):
         print("🔥 BOT STARTED")
         app.ws_task = asyncio.create_task(ws_loop(app, stop_event))
 
-    async def shutdown(app):
+    async def on_shutdown(app):
         print("🛑 SHUTDOWN...")
         stop_event.set()
-
         if hasattr(app, "ws_task"):
             app.ws_task.cancel()
             try:
@@ -137,10 +135,17 @@ def main():
             except:
                 pass
 
-    app.post_init = startup
-    app.post_shutdown = shutdown
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
 
-    app.run_polling(drop_pending_updates=True)
+    # 👇 تشغيل Webhook (بدون polling نهائيًا)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True,
+    )
 
 if __name__ == "__main__":
     main()
