@@ -46,12 +46,17 @@ def analyze(symbol):
         return None
 
 # ================= WS =================
-async def ws_loop(app):
+async def ws_loop(app, stop_event):
     url = "wss://stream.bybit.com/v5/public/spot"
 
-    while True:
+    while not stop_event.is_set():
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20
+            ) as ws:
+
                 print("🔥 WS CONNECTED")
 
                 await ws.send(json.dumps({
@@ -63,6 +68,9 @@ async def ws_loop(app):
                 }))
 
                 async for msg in ws:
+                    if stop_event.is_set():
+                        break
+
                     data = json.loads(msg)
 
                     if "data" not in data:
@@ -74,12 +82,10 @@ async def ws_loop(app):
                     for k in data["data"]:
                         symbol = k.get("symbol")
 
-                        # 🔥 الحل هنا
                         if not symbol:
                             continue
 
                         symbol = symbol.lower()
-
                         key = f"{symbol}_{tf}"
 
                         klines[key].append([
@@ -99,7 +105,14 @@ async def ws_loop(app):
                                     text=f"🚀 {res['symbol']} BUY @ {res['entry']:.4f}"
                                 )
 
+        except asyncio.CancelledError:
+            print("🛑 WS STOPPED")
+            return
+
         except Exception as e:
+            if stop_event.is_set():
+                return
+
             print("WS ERROR:", e)
             await asyncio.sleep(5)
 
@@ -107,11 +120,25 @@ async def ws_loop(app):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
+    stop_event = asyncio.Event()
+
     async def startup(app):
         print("🔥 BOT STARTED")
-        asyncio.create_task(ws_loop(app))
+        app.ws_task = asyncio.create_task(ws_loop(app, stop_event))
+
+    async def shutdown(app):
+        print("🛑 SHUTDOWN...")
+        stop_event.set()
+
+        if hasattr(app, "ws_task"):
+            app.ws_task.cancel()
+            try:
+                await app.ws_task
+            except:
+                pass
 
     app.post_init = startup
+    app.post_shutdown = shutdown
 
     app.run_polling(drop_pending_updates=True)
 
