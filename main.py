@@ -47,69 +47,77 @@ async def send_test(bot):
     except Exception as e:
         print("❌ TELEGRAM ERROR:", e)
 
-# ================= NEWS FILTER =================
-def news_filter():
-    return time.gmtime().tm_min > 5
-
-# ================= GET SYMBOLS =================
+# ================= SYMBOL FETCH =================
 async def get_top_symbols(limit=15):
     url = "https://api.bybit.com/v5/market/tickers?category=spot"
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Accept": "application/json"
+                    },
+                    timeout=10
+                ) as resp:
 
-                # ✅ تأكد إن الرد سليم
-                if resp.status != 200:
-                    print("❌ API STATUS:", resp.status)
-                    return []
-
-                text = await resp.text()
-
-                # ✅ حاول تحويله JSON
-                try:
-                    data = json.loads(text)
-                except Exception as e:
-                    print("❌ JSON ERROR:", e)
-                    print("RAW RESPONSE:", text[:200])  # أول 200 حرف
-                    return []
-
-                coins = data.get("result", {}).get("list", [])
-
-                if not coins:
-                    print("❌ EMPTY DATA FROM API")
-                    return []
-
-                coins = sorted(
-                    coins,
-                    key=lambda x: float(x.get("turnover24h", 0)),
-                    reverse=True
-                )
-
-                symbols = []
-                for c in coins:
-                    try:
-                        if float(c.get("turnover24h", 0)) < 1_000_000:
-                            continue
-
-                        if "USDT" not in c.get("symbol", ""):
-                            continue
-
-                        symbols.append(f"kline.1.{c['symbol']}")
-
-                        if len(symbols) >= limit:
-                            break
-
-                    except:
+                    if resp.status != 200:
+                        print(f"❌ API STATUS: {resp.status} (try {attempt+1})")
+                        await asyncio.sleep(2)
                         continue
 
-                print("🔥 SYMBOLS:", symbols)
-                return symbols
+                    data = await resp.json()
+                    coins = data.get("result", {}).get("list", [])
 
-    except Exception as e:
-        print("🚨 SYMBOL FETCH ERROR:", e)
-        return []
-# ================= ANALYZE =================
+                    if not coins:
+                        print("❌ EMPTY API DATA")
+                        break
+
+                    coins = sorted(
+                        coins,
+                        key=lambda x: float(x.get("turnover24h", 0)),
+                        reverse=True
+                    )
+
+                    symbols = []
+                    for c in coins:
+                        try:
+                            if float(c.get("turnover24h", 0)) < 1_000_000:
+                                continue
+
+                            if "USDT" not in c.get("symbol", ""):
+                                continue
+
+                            symbols.append(f"kline.1.{c['symbol']}")
+
+                            if len(symbols) >= limit:
+                                break
+                        except:
+                            continue
+
+                    print("🔥 SYMBOLS:", symbols)
+                    return symbols
+
+        except Exception as e:
+            print("🚨 API ERROR:", e)
+
+    # 🔥 fallback
+    print("⚠️ USING FALLBACK SYMBOLS")
+    return [
+        "kline.1.BTCUSDT",
+        "kline.1.ETHUSDT",
+        "kline.1.SOLUSDT",
+        "kline.1.BNBUSDT",
+        "kline.1.XRPUSDT"
+    ]
+
+# ================= FILTER =================
+def news_filter():
+    return time.gmtime().tm_min > 5
+
+# ================= ANALYSIS =================
 def analyze(symbol):
     try:
         k1 = list(klines[f"{symbol}_1"])
@@ -134,7 +142,7 @@ def analyze(symbol):
         recent_high = df["h"].rolling(20).max().iloc[-2]
         breakout = price > recent_high * 0.998
 
-        # فلتر Pump
+        # ❌ منع الدخول بعد pump
         change = abs(price - df.iloc[-2]["c"]) / df.iloc[-2]["c"]
         if change > 0.05:
             return None
@@ -184,7 +192,7 @@ async def ws_loop(bot):
 
     while True:
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
                 print("🔥 WS CONNECTED")
 
                 active_symbols = await get_top_symbols()
@@ -244,7 +252,6 @@ async def main():
 
     print("🔥 BOT RUNNING")
 
-    # ✅ رسالة تأكيد التشغيل
     await send_test(app.bot)
 
     asyncio.create_task(ws_loop(app.bot))
