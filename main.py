@@ -1,4 +1,4 @@
-print("🔥 BOT STARTING...")
+print("🔥 BEAST MODE STARTING...")
 
 import os
 import asyncio
@@ -6,21 +6,30 @@ import json
 import time
 from collections import defaultdict, deque
 from aiohttp import web
-import aiohttp
 
 import pandas as pd
 import ta
 import websockets
 from telegram.ext import Application
 
-print("🚨 BOT FILE LOADED")
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID   = int(os.getenv("CHAT_ID", "0"))
 PORT      = int(os.getenv("PORT", "8080"))
 
+# ================= STORAGE =================
 klines = defaultdict(lambda: deque(maxlen=300))
+vol_history = defaultdict(lambda: deque(maxlen=60))  # حجم آخر 60 دقيقة
+scoreboard = defaultdict(float)  # تقييم الأداء
 last_signal_time = {}
+
+# قائمة واسعة (بدون API)
+ALL_SYMBOLS = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT",
+    "DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT","ARBUSDT","OPUSDT",
+    "INJUSDT","SUIUSDT","SEIUSDT","APTUSDT","FTMUSDT","NEARUSDT",
+    "ATOMUSDT","TRXUSDT","LTCUSDT","ETCUSDT","FILUSDT","ICPUSDT"
+]
+
 active_symbols = []
 
 # ================= HEALTH =================
@@ -36,137 +45,97 @@ async def start_health_server():
     await site.start()
     print("✅ Health server running")
 
-# ================= TEST MESSAGE =================
+# ================= TEST =================
 async def send_test(bot):
-    try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="🔥 البوت شغال الآن — Test Message"
-        )
-        print("✅ TEST MESSAGE SENT")
-    except Exception as e:
-        print("❌ TELEGRAM ERROR:", e)
+    await bot.send_message(chat_id=CHAT_ID, text="🔥 BEAST MODE ON")
 
-# ================= SYMBOL FETCH =================
-async def get_top_symbols(limit=15):
-    url = "https://api.bybit.com/v5/market/tickers?category=spot"
+# ================= SMART SELECTION =================
+def select_top_symbols(limit=15):
+    # اختيار أعلى سكورات
+    sorted_symbols = sorted(
+        ALL_SYMBOLS,
+        key=lambda s: scoreboard[s],
+        reverse=True
+    )
+    selected = sorted_symbols[:limit]
 
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0",
-                        "Accept": "application/json"
-                    },
-                    timeout=10
-                ) as resp:
-
-                    if resp.status != 200:
-                        print(f"❌ API STATUS: {resp.status} (try {attempt+1})")
-                        await asyncio.sleep(2)
-                        continue
-
-                    data = await resp.json()
-                    coins = data.get("result", {}).get("list", [])
-
-                    if not coins:
-                        print("❌ EMPTY API DATA")
-                        break
-
-                    coins = sorted(
-                        coins,
-                        key=lambda x: float(x.get("turnover24h", 0)),
-                        reverse=True
-                    )
-
-                    symbols = []
-                    for c in coins:
-                        try:
-                            if float(c.get("turnover24h", 0)) < 1_000_000:
-                                continue
-
-                            if "USDT" not in c.get("symbol", ""):
-                                continue
-
-                            symbols.append(f"kline.1.{c['symbol']}")
-
-                            if len(symbols) >= limit:
-                                break
-                        except:
-                            continue
-
-                    print("🔥 SYMBOLS:", symbols)
-                    return symbols
-
-        except Exception as e:
-            print("🚨 API ERROR:", e)
-
-    # 🔥 fallback
-    print("⚠️ USING FALLBACK SYMBOLS")
-    return [
-        "kline.1.BTCUSDT",
-        "kline.1.ETHUSDT",
-        "kline.1.SOLUSDT",
-        "kline.1.BNBUSDT",
-        "kline.1.XRPUSDT"
-    ]
-
-# ================= FILTER =================
-def news_filter():
-    return time.gmtime().tm_min > 5
+    print("🧠 SELECTED:", selected)
+    return [f"kline.1.{s}" for s in selected]
 
 # ================= ANALYSIS =================
 def analyze(symbol):
     try:
         k1 = list(klines[f"{symbol}_1"])
-        if len(k1) < 100:
+        if len(k1) < 120:
             return None
 
         df = pd.DataFrame(k1, columns=["t","o","h","l","c","v"])
         price = df.iloc[-1]["c"]
 
-        df["ema9"] = ta.trend.EMAIndicator(df["c"], 9).ema_indicator()
+        # ===== indicators =====
+        df["ema9"]  = ta.trend.EMAIndicator(df["c"], 9).ema_indicator()
         df["ema21"] = ta.trend.EMAIndicator(df["c"], 21).ema_indicator()
         df["ema50"] = ta.trend.EMAIndicator(df["c"], 50).ema_indicator()
-        df["rsi"] = ta.momentum.RSIIndicator(df["c"]).rsi()
+        df["rsi"]   = ta.momentum.RSIIndicator(df["c"]).rsi()
 
+        # ===== volume =====
         vol_now = df.iloc[-1]["v"]
         vol_avg = df["v"].rolling(20).mean().iloc[-2]
+        vol_history[symbol].append(vol_now)
 
         volume_spike = vol_now > vol_avg * 2
-        trend = price > df.iloc[-1]["ema50"]
-        momentum = 50 < df.iloc[-1]["rsi"] < 70
 
+        # ===== pump detection (بدري) =====
+        recent = df["c"].pct_change().tail(5).sum()
+        pump_early = recent > 0.02 and volume_spike
+
+        # ===== whale (liquidity trap) =====
         recent_high = df["h"].rolling(20).max().iloc[-2]
-        breakout = price > recent_high * 0.998
+        sweep = df.iloc[-1]["h"] > recent_high and price < recent_high
 
-        # ❌ منع الدخول بعد pump
-        change = abs(price - df.iloc[-2]["c"]) / df.iloc[-2]["c"]
-        if change > 0.05:
+        # ===== trend filter =====
+        trend = price > df.iloc[-1]["ema50"]
+
+        # ===== anti fake =====
+        candle = df.iloc[-1]
+        size = candle["h"] - candle["l"]
+        avg = (df["h"] - df["l"]).rolling(20).mean().iloc[-2]
+        not_fake = size < avg * 2.5
+
+        if not trend or not not_fake:
             return None
 
         score = 0
-        score += 25 if volume_spike else 0
-        score += 25 if trend else 0
-        score += 25 if momentum else 0
-        score += 25 if breakout else 0
+        if volume_spike: score += 25
+        if pump_early: score += 25
+        if sweep: score += 25
+        if trend: score += 25
 
         if score < 60:
             return None
+
+        # تحديث scoreboard
+        scoreboard[symbol.upper()] += score * 0.1
 
         atr = ta.volatility.AverageTrueRange(
             df["h"], df["l"], df["c"]
         ).average_true_range().iloc[-1]
 
+        if sweep:
+            sig_type = "🐋 Smart Money"
+        elif pump_early:
+            sig_type = "🔥 Early Pump"
+        else:
+            sig_type = "⚡ Momentum"
+
         return {
             "symbol": symbol.upper(),
             "entry": price,
             "tp1": price + atr * 1.2,
-            "tp2": price + atr * 2.5,
-            "sl": price - atr * 1.0,
-            "score": score
+            "tp2": price + atr * 2.2,
+            "sl": price - atr,
+            "score": score,
+            "type": sig_type
         }
 
     except Exception as e:
@@ -174,14 +143,14 @@ def analyze(symbol):
         return None
 
 # ================= MESSAGE =================
-def format_message(res):
+def format_msg(r):
     return (
-        f"⚡ SIGNAL {res['symbol']}\n\n"
-        f"💰 Entry: {res['entry']:.4f}\n"
-        f"🎯 TP1: {res['tp1']:.4f}\n"
-        f"🎯 TP2: {res['tp2']:.4f}\n"
-        f"🛑 SL: {res['sl']:.4f}\n\n"
-        f"🧠 Confidence: {res['score']}%"
+        f"{r['type']}\n\n"
+        f"💰 Entry: {r['entry']:.4f}\n"
+        f"🎯 TP1: {r['tp1']:.4f}\n"
+        f"🎯 TP2: {r['tp2']:.4f}\n"
+        f"🛑 SL: {r['sl']:.4f}\n\n"
+        f"🧠 Confidence: {r['score']}%"
     )
 
 # ================= WS =================
@@ -192,18 +161,38 @@ async def ws_loop(bot):
 
     while True:
         try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
+            async with websockets.connect(url, ping_interval=20) as ws:
                 print("🔥 WS CONNECTED")
 
-                active_symbols = await get_top_symbols()
+                active_symbols = select_top_symbols()
 
                 await ws.send(json.dumps({
                     "op": "subscribe",
                     "args": active_symbols
                 }))
 
+                last_update = time.time()
+
                 async for msg in ws:
                     data = json.loads(msg)
+
+                    # 🔄 تغيير العملات كل 10 دقائق
+                    if time.time() - last_update > 600:
+                        new = select_top_symbols()
+
+                        await ws.send(json.dumps({
+                            "op": "unsubscribe",
+                            "args": active_symbols
+                        }))
+
+                        await ws.send(json.dumps({
+                            "op": "subscribe",
+                            "args": new
+                        }))
+
+                        active_symbols = new
+                        last_update = time.time()
+                        print("🔄 SYMBOL ROTATION")
 
                     if "data" not in data:
                         continue
@@ -225,8 +214,8 @@ async def ws_loop(bot):
                         ])
 
                         res = analyze(s)
-                        if res and news_filter():
 
+                        if res:
                             now = time.time()
                             if s in last_signal_time and now - last_signal_time[s] < 180:
                                 continue
@@ -235,7 +224,7 @@ async def ws_loop(bot):
 
                             await bot.send_message(
                                 chat_id=CHAT_ID,
-                                text=format_message(res)
+                                text=format_msg(res)
                             )
 
         except Exception as e:
@@ -258,6 +247,5 @@ async def main():
 
     await asyncio.Event().wait()
 
-# ================= RUN =================
 if __name__ == "__main__":
     asyncio.run(main())
