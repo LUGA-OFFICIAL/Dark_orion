@@ -57,35 +57,58 @@ async def get_top_symbols(limit=15):
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                data = await resp.json()
-                coins = data["result"]["list"]
+            async with session.get(url, timeout=10) as resp:
+
+                # ✅ تأكد إن الرد سليم
+                if resp.status != 200:
+                    print("❌ API STATUS:", resp.status)
+                    return []
+
+                text = await resp.text()
+
+                # ✅ حاول تحويله JSON
+                try:
+                    data = json.loads(text)
+                except Exception as e:
+                    print("❌ JSON ERROR:", e)
+                    print("RAW RESPONSE:", text[:200])  # أول 200 حرف
+                    return []
+
+                coins = data.get("result", {}).get("list", [])
+
+                if not coins:
+                    print("❌ EMPTY DATA FROM API")
+                    return []
 
                 coins = sorted(
                     coins,
-                    key=lambda x: float(x["turnover24h"]),
+                    key=lambda x: float(x.get("turnover24h", 0)),
                     reverse=True
                 )
 
                 symbols = []
                 for c in coins:
-                    if float(c["turnover24h"]) < 1_000_000:
-                        continue
-                    if "USDT" not in c["symbol"]:
-                        continue
+                    try:
+                        if float(c.get("turnover24h", 0)) < 1_000_000:
+                            continue
 
-                    symbols.append(f"kline.1.{c['symbol']}")
+                        if "USDT" not in c.get("symbol", ""):
+                            continue
 
-                    if len(symbols) >= limit:
-                        break
+                        symbols.append(f"kline.1.{c['symbol']}")
+
+                        if len(symbols) >= limit:
+                            break
+
+                    except:
+                        continue
 
                 print("🔥 SYMBOLS:", symbols)
                 return symbols
 
     except Exception as e:
-        print("SYMBOL ERROR:", e)
+        print("🚨 SYMBOL FETCH ERROR:", e)
         return []
-
 # ================= ANALYZE =================
 def analyze(symbol):
     try:
