@@ -1,4 +1,4 @@
-print("🔥🔥🔥 BOT IS REALLY STARTING 🔥🔥🔥")
+print("🔥🔥🔥 STARTED 100% 🔥🔥🔥")
 print("🔥 BOT STARTING...")
 
 import os
