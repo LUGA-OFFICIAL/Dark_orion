@@ -1,3 +1,4 @@
+print("🔥🔥🔥 BOT IS REALLY STARTING 🔥🔥🔥")
 print("🔥 BOT STARTING...")
 
 import os
