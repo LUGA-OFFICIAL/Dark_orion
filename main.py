@@ -1,4 +1,4 @@
-print("🔥 BEAST MODE STARTING...")
+print("🔥 BEAST MODE FINAL STARTING...")
 
 import os
 import asyncio
@@ -18,11 +18,9 @@ PORT      = int(os.getenv("PORT", "8080"))
 
 # ================= STORAGE =================
 klines = defaultdict(lambda: deque(maxlen=300))
-vol_history = defaultdict(lambda: deque(maxlen=60))  # حجم آخر 60 دقيقة
-scoreboard = defaultdict(float)  # تقييم الأداء
+scoreboard = defaultdict(float)
 last_signal_time = {}
 
-# قائمة واسعة (بدون API)
 ALL_SYMBOLS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT",
     "DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT","ARBUSDT","OPUSDT",
@@ -47,18 +45,16 @@ async def start_health_server():
 
 # ================= TEST =================
 async def send_test(bot):
-    await bot.send_message(chat_id=CHAT_ID, text="🔥 BEAST MODE ON")
+    await bot.send_message(chat_id=CHAT_ID, text="🔥 BEAST MODE ACTIVE")
 
 # ================= SMART SELECTION =================
-def select_top_symbols(limit=15):
-    # اختيار أعلى سكورات
+def select_top_symbols(limit=25):
     sorted_symbols = sorted(
         ALL_SYMBOLS,
         key=lambda s: scoreboard[s],
         reverse=True
     )
     selected = sorted_symbols[:limit]
-
     print("🧠 SELECTED:", selected)
     return [f"kline.1.{s}" for s in selected]
 
@@ -66,55 +62,51 @@ def select_top_symbols(limit=15):
 def analyze(symbol):
     try:
         k1 = list(klines[f"{symbol}_1"])
-        if len(k1) < 120:
+        if len(k1) < 100:
             return None
 
         df = pd.DataFrame(k1, columns=["t","o","h","l","c","v"])
         price = df.iloc[-1]["c"]
 
-        # ===== indicators =====
-        df["ema9"]  = ta.trend.EMAIndicator(df["c"], 9).ema_indicator()
+        df["ema9"] = ta.trend.EMAIndicator(df["c"], 9).ema_indicator()
         df["ema21"] = ta.trend.EMAIndicator(df["c"], 21).ema_indicator()
         df["ema50"] = ta.trend.EMAIndicator(df["c"], 50).ema_indicator()
-        df["rsi"]   = ta.momentum.RSIIndicator(df["c"]).rsi()
+        df["rsi"] = ta.momentum.RSIIndicator(df["c"]).rsi()
 
-        # ===== volume =====
         vol_now = df.iloc[-1]["v"]
         vol_avg = df["v"].rolling(20).mean().iloc[-2]
-        vol_history[symbol].append(vol_now)
+        volume_spike = vol_now > vol_avg * 1.2
 
-        volume_spike = vol_now > vol_avg * 2
+        recent = df["c"].pct_change().tail(3).sum()
+        pump_early = recent > 0.01
 
-        # ===== pump detection (بدري) =====
-        recent = df["c"].pct_change().tail(5).sum()
-        pump_early = recent > 0.02 and volume_spike
-
-        # ===== whale (liquidity trap) =====
         recent_high = df["h"].rolling(20).max().iloc[-2]
         sweep = df.iloc[-1]["h"] > recent_high and price < recent_high
 
-        # ===== trend filter =====
-        trend = price > df.iloc[-1]["ema50"]
-
-        # ===== anti fake =====
+        # منع الشموع الغبية
         candle = df.iloc[-1]
         size = candle["h"] - candle["l"]
         avg = (df["h"] - df["l"]).rolling(20).mean().iloc[-2]
-        not_fake = size < avg * 2.5
-
-        if not trend or not not_fake:
+        if size > avg * 2.5:
             return None
 
         score = 0
         if volume_spike: score += 25
         if pump_early: score += 25
         if sweep: score += 25
-        if trend: score += 25
+        if price > df.iloc[-1]["ema50"]: score += 25
 
-        if score < 60:
+        # ================= GRADE =================
+        if score >= 70:
+            grade = "🔥 HIGH QUALITY"
+        elif score >= 50:
+            grade = "⚡ MEDIUM"
+        elif score >= 35:
+            grade = "🎯 SCALP"
+        else:
             return None
 
-        # تحديث scoreboard
+        # تحديث الأداء
         scoreboard[symbol.upper()] += score * 0.1
 
         atr = ta.volatility.AverageTrueRange(
@@ -131,11 +123,12 @@ def analyze(symbol):
         return {
             "symbol": symbol.upper(),
             "entry": price,
-            "tp1": price + atr * 1.2,
-            "tp2": price + atr * 2.2,
+            "tp1": price + atr * (1.5 if score >= 70 else 1.0),
+            "tp2": price + atr * (2.5 if score >= 70 else 1.5),
             "sl": price - atr,
             "score": score,
-            "type": sig_type
+            "type": sig_type,
+            "grade": grade
         }
 
     except Exception as e:
@@ -144,8 +137,16 @@ def analyze(symbol):
 
 # ================= MESSAGE =================
 def format_msg(r):
+    if "HIGH" in r["grade"]:
+        explanation = "💎 فرصة قوية — توافق مؤشرات + سيولة"
+    elif "MEDIUM" in r["grade"]:
+        explanation = "⚡ فرصة متوسطة — زخم جيد"
+    else:
+        explanation = "🎯 سكالب سريع — مخاطرة أعلى"
+
     return (
-        f"{r['type']}\n\n"
+        f"{r['grade']} | {r['type']}\n\n"
+        f"{explanation}\n\n"
         f"💰 Entry: {r['entry']:.4f}\n"
         f"🎯 TP1: {r['tp1']:.4f}\n"
         f"🎯 TP2: {r['tp2']:.4f}\n"
@@ -156,7 +157,6 @@ def format_msg(r):
 # ================= WS =================
 async def ws_loop(bot):
     global active_symbols
-
     url = "wss://stream.bybit.com/v5/public/spot"
 
     while True:
@@ -217,7 +217,7 @@ async def ws_loop(bot):
 
                         if res:
                             now = time.time()
-                            if s in last_signal_time and now - last_signal_time[s] < 180:
+                            if s in last_signal_time and now - last_signal_time[s] < 90:
                                 continue
 
                             last_signal_time[s] = now
