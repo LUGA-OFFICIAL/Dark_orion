@@ -10,7 +10,7 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 HYBRID BEAST MODE")
+print("🔥 BINANCE BEAST MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -19,10 +19,26 @@ PORT = int(os.getenv("PORT", "8080"))
 COOLDOWN = 1800
 
 SYMBOLS = [
-    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","DOGEUSDT",
-    "ADAUSDT","BNBUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
-    "ARBUSDT","OPUSDT","INJUSDT","APTUSDT","SUIUSDT",
-    "SEIUSDT","NEARUSDT","ATOMUSDT","LTCUSDT","FILUSDT"
+    "btcusdt",
+    "ethusdt",
+    "solusdt",
+    "xrpusdt",
+    "dogeusdt",
+    "adausdt",
+    "bnbusdt",
+    "avaxusdt",
+    "linkusdt",
+    "maticusdt",
+    "arbusdt",
+    "opusdt",
+    "injusdt",
+    "aptusdt",
+    "suiusdt",
+    "seiusdt",
+    "nearusdt",
+    "atomusdt",
+    "ltcusdt",
+    "filusdt"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=300))
@@ -69,7 +85,7 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        if len(data) < 40:
+        if len(data) < 20:
             return None
 
         df = pd.DataFrame(
@@ -175,7 +191,7 @@ def analyze(symbol):
         sl = price - atr
 
         return {
-            "symbol": symbol,
+            "symbol": symbol.upper(),
             "grade": grade,
             "price": price,
             "tp1": tp1,
@@ -214,7 +230,7 @@ async def check_trade(bot, symbol, price):
 
     trade = open_trades[symbol]
 
-    # ================= TP1 =================
+    # TP1
     if (
         not trade["tp1_hit"]
         and price >= trade["tp1"]
@@ -230,11 +246,11 @@ async def check_trade(bot, symbol, price):
                 f"🎯 TP1 HIT\n\n"
                 f"{symbol}\n"
                 f"Price: {fmt(price)}\n\n"
-                f"🛡 Stop Loss moved to Entry"
+                f"🛡 SL moved to entry"
             )
         )
 
-    # ================= TP2 =================
+    # TP2
     if price >= trade["tp2"]:
 
         await bot.send_message(
@@ -249,7 +265,7 @@ async def check_trade(bot, symbol, price):
 
         del open_trades[symbol]
 
-    # ================= SL =================
+    # SL
     elif price <= trade["sl"]:
 
         await bot.send_message(
@@ -266,7 +282,14 @@ async def check_trade(bot, symbol, price):
 # ================= WEBSOCKET =================
 async def ws_loop(bot):
 
-    url = "wss://stream.bybit.com/v5/public/spot"
+    streams = "/".join(
+        [f"{s}@kline_1m" for s in SYMBOLS]
+    )
+
+    url = (
+        "wss://stream.binance.com:9443/stream?streams="
+        + streams
+    )
 
     while True:
 
@@ -277,22 +300,12 @@ async def ws_loop(bot):
                 ping_interval=20
             ) as ws:
 
-                print("🔥 WS CONNECTED")
+                print("🔥 BINANCE CONNECTED")
 
                 await bot.send_message(
                     chat_id=CHAT_ID,
-                    text="🔥 Market Connected"
+                    text="🔥 Binance Market Connected"
                 )
-
-                args = []
-
-                for s in SYMBOLS:
-                    args.append(f"kline.1.{s}")
-
-                await ws.send(json.dumps({
-                    "op": "subscribe",
-                    "args": args
-                }))
 
                 async for raw in ws:
 
@@ -301,57 +314,54 @@ async def ws_loop(bot):
                     if "data" not in data:
                         continue
 
-                    for k in data["data"]:
+                    k = data["data"]["k"]
 
-                        symbol = k.get("symbol")
+                    symbol = k["s"].lower()
 
-                        if not symbol:
+                    close_price = float(k["c"])
+
+                    klines[symbol].append([
+                        k["t"],
+                        float(k["o"]),
+                        float(k["h"]),
+                        float(k["l"]),
+                        close_price,
+                        float(k["v"])
+                    ])
+
+                    # ================= CHECK TRADE =================
+                    await check_trade(
+                        bot,
+                        symbol.upper(),
+                        close_price
+                    )
+
+                    # ================= ANALYZE =================
+                    res = analyze(symbol)
+
+                    if not res:
+                        continue
+
+                    now = time.time()
+
+                    if symbol in last_signal:
+
+                        if (
+                            now - last_signal[symbol]
+                            < COOLDOWN
+                        ):
                             continue
 
-                        price = float(
-                            k.get("close", 0)
-                        )
+                    last_signal[symbol] = now
 
-                        klines[symbol].append([
-                            k.get("start"),
-                            float(k.get("open", 0)),
-                            float(k.get("high", 0)),
-                            float(k.get("low", 0)),
-                            price,
-                            float(k.get("volume", 0)),
-                        ])
+                    open_trades[
+                        symbol.upper()
+                    ] = res
 
-                        # ================= CHECK TP/SL =================
-                        await check_trade(
-                            bot,
-                            symbol,
-                            price
-                        )
-
-                        # ================= NEW SIGNAL =================
-                        res = analyze(symbol)
-
-                        if not res:
-                            continue
-
-                        now = time.time()
-
-                        if symbol in last_signal:
-
-                            if (
-                                now - last_signal[symbol]
-                                < COOLDOWN
-                            ):
-                                continue
-
-                        last_signal[symbol] = now
-
-                        open_trades[symbol] = res
-
-                        await bot.send_message(
-                            chat_id=CHAT_ID,
-                            text=signal_message(res)
-                        )
+                    await bot.send_message(
+                        chat_id=CHAT_ID,
+                        text=signal_message(res)
+                    )
 
         except Exception as e:
 
@@ -373,7 +383,7 @@ async def main():
 
     await app.bot.send_message(
         chat_id=CHAT_ID,
-        text="🔥 Hybrid Beast Mode Activated"
+        text="🔥 Binance Beast Mode Activated"
     )
 
     asyncio.create_task(
