@@ -16,8 +16,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
+# وقت الانتظار بين الإشارات لنفس العملة
 COOLDOWN = 900
 
+# العملات
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -85,6 +87,7 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
+        # يبدأ بسرعة
         if len(data) < 10:
             return None
 
@@ -144,7 +147,7 @@ def analyze(symbol):
             score += 10
 
         # ================= VOLUME =================
-        if vol_now > vol_avg * 0.8:
+        if vol_now > vol_avg * 0.5:
             score += 20
 
         if vol_now > vol_avg * 1.5:
@@ -152,7 +155,7 @@ def analyze(symbol):
             sniper = True
 
         # ================= MOMENTUM =================
-        if recent_move > -0.002:
+        if recent_move > -0.01:
             score += 20
 
         if recent_move > 0.015:
@@ -169,16 +172,16 @@ def analyze(symbol):
             score += 15
 
         # ================= GRADES =================
-        if sniper and score >= 85:
+        if sniper and score >= 65:
             grade = "🐋 SNIPER"
 
-        elif score >= 70:
+        elif score >= 55:
             grade = "🔥 HIGH"
 
-        elif score >= 50:
+        elif score >= 40:
             grade = "⚡ MEDIUM"
 
-        elif score >= 25:
+        elif score >= 15:
             grade = "🎯 SCALP"
 
         else:
