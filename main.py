@@ -67,7 +67,7 @@ def analyze(symbol):
     try:
         data = list(klines[symbol])
 
-        if len(data) < 100:
+        if len(data) < 40:
             return None
 
         df = pd.DataFrame(
