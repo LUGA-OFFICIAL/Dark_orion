@@ -90,7 +90,7 @@ def analyze(symbol):
 
         df = pd.DataFrame(
             data,
-            columns=["t","o","h","l","c","v"]
+            columns=["t", "o", "h", "l", "c", "v"]
         )
 
         price = df["c"].iloc[-1]
@@ -333,16 +333,44 @@ async def ws_loop(bot):
                             continue
 
                         close_price = float(
-                            k.get("close", 0)
+                            k.get("close")
+                            or k.get("c")
+                            or 0
                         )
+
+                        open_price = float(
+                            k.get("open")
+                            or k.get("o")
+                            or 0
+                        )
+
+                        high_price = float(
+                            k.get("high")
+                            or k.get("h")
+                            or 0
+                        )
+
+                        low_price = float(
+                            k.get("low")
+                            or k.get("l")
+                            or 0
+                        )
+
+                        volume = float(
+                            k.get("volume")
+                            or k.get("v")
+                            or 0
+                        )
+
+                        print(symbol, close_price)
 
                         klines[symbol].append([
                             k.get("start"),
-                            float(k.get("open", 0)),
-                            float(k.get("high", 0)),
-                            float(k.get("low", 0)),
+                            open_price,
+                            high_price,
+                            low_price,
                             close_price,
-                            float(k.get("volume", 0))
+                            volume
                         ])
 
                         # ================= CHECK TRADES =================
