@@ -10,14 +10,16 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 BINANCE BEAST MODE")
+print("🔥 FAST BEAST MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-COOLDOWN = 1800
+# تقليل الانتظار بين الإشارات
+COOLDOWN = 900
 
+# العملات
 SYMBOLS = [
     "btcusdt",
     "ethusdt",
@@ -38,7 +40,12 @@ SYMBOLS = [
     "nearusdt",
     "atomusdt",
     "ltcusdt",
-    "filusdt"
+    "filusdt",
+    "dotusdt",
+    "uniusdt",
+    "aaveusdt",
+    "algousdt",
+    "hbarusdt"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=300))
@@ -85,7 +92,8 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        if len(data) < 20:
+        # يبدأ بسرعة
+        if len(data) < 10:
             return None
 
         df = pd.DataFrame(
@@ -113,67 +121,72 @@ def analyze(symbol):
 
         vol_now = df["v"].iloc[-1]
 
-        vol_avg = df["v"].rolling(20).mean().iloc[-1]
+        vol_avg = (
+            df["v"]
+            .rolling(10)
+            .mean()
+            .iloc[-1]
+        )
 
         recent_move = (
-            df["c"].pct_change()
+            df["c"]
+            .pct_change()
             .tail(3)
             .sum()
         )
 
-        # ================= SCORE =================
         score = 0
         sniper = False
 
-        # TREND
+        # ================= TREND =================
         if df["ema9"].iloc[-1] > df["ema21"].iloc[-1]:
             score += 20
         else:
-            score += 5
+            score += 10
 
-        # RSI
-        if 45 <= rsi <= 65:
+        # ================= RSI =================
+        if 35 <= rsi <= 70:
             score += 20
 
         if rsi < 40:
-            score += 15
+            score += 10
 
-        # VOLUME
-        if vol_now > vol_avg:
+        # ================= VOLUME =================
+        if vol_now > vol_avg * 0.8:
             score += 20
 
-        if vol_now > vol_avg * 2:
+        if vol_now > vol_avg * 1.5:
             score += 25
             sniper = True
 
-        # MOMENTUM
-        if recent_move > 0:
+        # ================= MOMENTUM =================
+        if recent_move > -0.002:
             score += 20
 
         if recent_move > 0.015:
             score += 25
             sniper = True
 
-        # CANDLE
-        last_candle = (
+        # ================= CANDLE =================
+        candle = (
             df["c"].iloc[-1]
             - df["o"].iloc[-1]
         )
 
-        if last_candle > 0:
+        if candle > 0:
             score += 15
 
         # ================= GRADES =================
-        if sniper and score >= 90:
+        if sniper and score >= 85:
             grade = "🐋 SNIPER"
 
-        elif score >= 75:
+        elif score >= 70:
             grade = "🔥 HIGH"
 
-        elif score >= 55:
+        elif score >= 50:
             grade = "⚡ MEDIUM"
 
-        elif score >= 35:
+        elif score >= 25:
             grade = "🎯 SCALP"
 
         else:
@@ -186,9 +199,9 @@ def analyze(symbol):
             df["c"]
         ).average_true_range().iloc[-1]
 
-        tp1 = price + atr * 1.2
-        tp2 = price + atr * 2.0
-        sl = price - atr
+        tp1 = price + atr * 1.0
+        tp2 = price + atr * 1.8
+        sl = price - atr * 0.8
 
         return {
             "symbol": symbol.upper(),
@@ -208,7 +221,7 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL MESSAGE =================
+# ================= SIGNAL =================
 def signal_message(r):
 
     return (
@@ -222,7 +235,7 @@ def signal_message(r):
         f"📈 RSI: {r['rsi']}"
     )
 
-# ================= TP/SL CHECK =================
+# ================= TP/SL =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -329,7 +342,7 @@ async def ws_loop(bot):
                         float(k["v"])
                     ])
 
-                    # ================= CHECK TRADE =================
+                    # ================= CHECK TRADES =================
                     await check_trade(
                         bot,
                         symbol.upper(),
@@ -383,7 +396,7 @@ async def main():
 
     await app.bot.send_message(
         chat_id=CHAT_ID,
-        text="🔥 Binance Beast Mode Activated"
+        text="🔥 Fast Beast Mode Activated"
     )
 
     asyncio.create_task(
