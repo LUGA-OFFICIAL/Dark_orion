@@ -10,7 +10,7 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 BEAST MODE STARTING")
+print("🔥 HYBRID BEAST MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -19,52 +19,54 @@ PORT = int(os.getenv("PORT", "8080"))
 COOLDOWN = 1800
 
 SYMBOLS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "SOLUSDT",
-    "XRPUSDT",
-    "DOGEUSDT",
-    "ADAUSDT",
-    "BNBUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "MATICUSDT",
-    "ARBUSDT",
-    "OPUSDT",
-    "INJUSDT",
-    "APTUSDT",
-    "SUIUSDT"
+    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","DOGEUSDT",
+    "ADAUSDT","BNBUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
+    "ARBUSDT","OPUSDT","INJUSDT","APTUSDT","SUIUSDT",
+    "SEIUSDT","NEARUSDT","ATOMUSDT","LTCUSDT","FILUSDT"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=300))
 last_signal = {}
+open_trades = {}
 
 # ================= HEALTH =================
 async def health(request):
     return web.Response(text="OK")
 
 async def start_health():
+
     app = web.Application()
     app.router.add_get("/", health)
 
     runner = web.AppRunner(app)
     await runner.setup()
 
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        PORT
+    )
+
     await site.start()
 
     print(f"✅ Health server on {PORT}")
 
 # ================= FORMAT =================
 def fmt(x):
+
+    if x >= 1000:
+        return f"{x:,.2f}"
+
     if x >= 1:
         return f"{x:.4f}"
+
     return f"{x:.8f}"
 
-# ================= ANALYSIS =================
+# ================= ANALYZE =================
 def analyze(symbol):
 
     try:
+
         data = list(klines[symbol])
 
         if len(data) < 40:
@@ -78,46 +80,90 @@ def analyze(symbol):
         price = df["c"].iloc[-1]
 
         # ================= INDICATORS =================
-        df["ema9"] = ta.trend.EMAIndicator(df["c"], 9).ema_indicator()
-        df["ema21"] = ta.trend.EMAIndicator(df["c"], 21).ema_indicator()
+        df["ema9"] = ta.trend.EMAIndicator(
+            df["c"],
+            9
+        ).ema_indicator()
 
-        rsi = ta.momentum.RSIIndicator(df["c"], 14).rsi().iloc[-1]
+        df["ema21"] = ta.trend.EMAIndicator(
+            df["c"],
+            21
+        ).ema_indicator()
+
+        rsi = ta.momentum.RSIIndicator(
+            df["c"],
+            14
+        ).rsi().iloc[-1]
 
         vol_now = df["v"].iloc[-1]
+
         vol_avg = df["v"].rolling(20).mean().iloc[-1]
 
-        recent_move = df["c"].pct_change().tail(3).sum()
+        recent_move = (
+            df["c"].pct_change()
+            .tail(3)
+            .sum()
+        )
 
+        # ================= SCORE =================
         score = 0
+        sniper = False
 
-        # ================= TREND =================
+        # TREND
         if df["ema9"].iloc[-1] > df["ema21"].iloc[-1]:
-            score += 25
+            score += 20
+        else:
+            score += 5
 
-        # ================= RSI =================
-        if rsi < 35:
-            score += 25
-        elif rsi < 50:
+        # RSI
+        if 45 <= rsi <= 65:
+            score += 20
+
+        if rsi < 40:
             score += 15
 
-        # ================= VOLUME =================
-        if vol_now > vol_avg * 1.3:
-            score += 25
+        # VOLUME
+        if vol_now > vol_avg:
+            score += 20
 
-        # ================= MOMENTUM =================
-        if recent_move > 0.008:
+        if vol_now > vol_avg * 2:
             score += 25
+            sniper = True
 
-        # ================= GRADE =================
-        if score >= 70:
+        # MOMENTUM
+        if recent_move > 0:
+            score += 20
+
+        if recent_move > 0.015:
+            score += 25
+            sniper = True
+
+        # CANDLE
+        last_candle = (
+            df["c"].iloc[-1]
+            - df["o"].iloc[-1]
+        )
+
+        if last_candle > 0:
+            score += 15
+
+        # ================= GRADES =================
+        if sniper and score >= 90:
+            grade = "🐋 SNIPER"
+
+        elif score >= 75:
             grade = "🔥 HIGH"
-        elif score >= 50:
+
+        elif score >= 55:
             grade = "⚡ MEDIUM"
+
         elif score >= 35:
             grade = "🎯 SCALP"
+
         else:
             return None
 
+        # ================= ATR =================
         atr = ta.volatility.AverageTrueRange(
             df["h"],
             df["l"],
@@ -136,14 +182,17 @@ def analyze(symbol):
             "tp2": tp2,
             "sl": sl,
             "score": score,
-            "rsi": round(rsi, 1)
+            "rsi": round(rsi, 1),
+            "tp1_hit": False
         }
 
     except Exception as e:
+
         print("ANALYZE ERROR:", e)
+
         return None
 
-# ================= MESSAGE =================
+# ================= SIGNAL MESSAGE =================
 def signal_message(r):
 
     return (
@@ -156,6 +205,63 @@ def signal_message(r):
         f"📊 Score: {r['score']}%\n"
         f"📈 RSI: {r['rsi']}"
     )
+
+# ================= TP/SL CHECK =================
+async def check_trade(bot, symbol, price):
+
+    if symbol not in open_trades:
+        return
+
+    trade = open_trades[symbol]
+
+    # ================= TP1 =================
+    if (
+        not trade["tp1_hit"]
+        and price >= trade["tp1"]
+    ):
+
+        trade["tp1_hit"] = True
+
+        trade["sl"] = trade["price"]
+
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                f"🎯 TP1 HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}\n\n"
+                f"🛡 Stop Loss moved to Entry"
+            )
+        )
+
+    # ================= TP2 =================
+    if price >= trade["tp2"]:
+
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                f"🚀 TP2 HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}\n\n"
+                f"✅ Trade completed"
+            )
+        )
+
+        del open_trades[symbol]
+
+    # ================= SL =================
+    elif price <= trade["sl"]:
+
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                f"🛑 STOP LOSS HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}"
+            )
+        )
+
+        del open_trades[symbol]
 
 # ================= WEBSOCKET =================
 async def ws_loop(bot):
@@ -202,15 +308,27 @@ async def ws_loop(bot):
                         if not symbol:
                             continue
 
+                        price = float(
+                            k.get("close", 0)
+                        )
+
                         klines[symbol].append([
                             k.get("start"),
                             float(k.get("open", 0)),
                             float(k.get("high", 0)),
                             float(k.get("low", 0)),
-                            float(k.get("close", 0)),
+                            price,
                             float(k.get("volume", 0)),
                         ])
 
+                        # ================= CHECK TP/SL =================
+                        await check_trade(
+                            bot,
+                            symbol,
+                            price
+                        )
+
+                        # ================= NEW SIGNAL =================
                         res = analyze(symbol)
 
                         if not res:
@@ -219,10 +337,16 @@ async def ws_loop(bot):
                         now = time.time()
 
                         if symbol in last_signal:
-                            if now - last_signal[symbol] < COOLDOWN:
+
+                            if (
+                                now - last_signal[symbol]
+                                < COOLDOWN
+                            ):
                                 continue
 
                         last_signal[symbol] = now
+
+                        open_trades[symbol] = res
 
                         await bot.send_message(
                             chat_id=CHAT_ID,
@@ -249,7 +373,7 @@ async def main():
 
     await app.bot.send_message(
         chat_id=CHAT_ID,
-        text="🔥 Beast Mode Activated"
+        text="🔥 Hybrid Beast Mode Activated"
     )
 
     asyncio.create_task(
