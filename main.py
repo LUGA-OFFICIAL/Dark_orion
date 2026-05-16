@@ -16,36 +16,29 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# تقليل الانتظار بين الإشارات
 COOLDOWN = 900
 
-# العملات
 SYMBOLS = [
-    "btcusdt",
-    "ethusdt",
-    "solusdt",
-    "xrpusdt",
-    "dogeusdt",
-    "adausdt",
-    "bnbusdt",
-    "avaxusdt",
-    "linkusdt",
-    "maticusdt",
-    "arbusdt",
-    "opusdt",
-    "injusdt",
-    "aptusdt",
-    "suiusdt",
-    "seiusdt",
-    "nearusdt",
-    "atomusdt",
-    "ltcusdt",
-    "filusdt",
-    "dotusdt",
-    "uniusdt",
-    "aaveusdt",
-    "algousdt",
-    "hbarusdt"
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "BNBUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "MATICUSDT",
+    "ARBUSDT",
+    "OPUSDT",
+    "INJUSDT",
+    "APTUSDT",
+    "SUIUSDT",
+    "SEIUSDT",
+    "NEARUSDT",
+    "ATOMUSDT",
+    "LTCUSDT",
+    "FILUSDT"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=300))
@@ -92,7 +85,6 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        # يبدأ بسرعة
         if len(data) < 10:
             return None
 
@@ -221,7 +213,7 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL =================
+# ================= SIGNAL MESSAGE =================
 def signal_message(r):
 
     return (
@@ -235,7 +227,7 @@ def signal_message(r):
         f"📈 RSI: {r['rsi']}"
     )
 
-# ================= TP/SL =================
+# ================= CHECK TRADE =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -295,14 +287,7 @@ async def check_trade(bot, symbol, price):
 # ================= WEBSOCKET =================
 async def ws_loop(bot):
 
-    streams = "/".join(
-        [f"{s}@kline_1m" for s in SYMBOLS]
-    )
-
-    url = (
-        "wss://stream.binance.com:9443/stream?streams="
-        + streams
-    )
+    url = "wss://stream.bybit.com/v5/public/spot"
 
     while True:
 
@@ -313,12 +298,22 @@ async def ws_loop(bot):
                 ping_interval=20
             ) as ws:
 
-                print("🔥 BINANCE CONNECTED")
+                print("🔥 BYBIT CONNECTED")
 
                 await bot.send_message(
                     chat_id=CHAT_ID,
-                    text="🔥 Binance Market Connected"
+                    text="🔥 Beast Mode Activated"
                 )
+
+                args = []
+
+                for s in SYMBOLS:
+                    args.append(f"kline.1.{s}")
+
+                await ws.send(json.dumps({
+                    "op": "subscribe",
+                    "args": args
+                }))
 
                 async for raw in ws:
 
@@ -327,54 +322,62 @@ async def ws_loop(bot):
                     if "data" not in data:
                         continue
 
-                    k = data["data"]["k"]
+                    for k in data["data"]:
 
-                    symbol = k["s"].lower()
+                        symbol = (
+                            k.get("symbol", "")
+                            .lower()
+                        )
 
-                    close_price = float(k["c"])
-
-                    klines[symbol].append([
-                        k["t"],
-                        float(k["o"]),
-                        float(k["h"]),
-                        float(k["l"]),
-                        close_price,
-                        float(k["v"])
-                    ])
-
-                    # ================= CHECK TRADES =================
-                    await check_trade(
-                        bot,
-                        symbol.upper(),
-                        close_price
-                    )
-
-                    # ================= ANALYZE =================
-                    res = analyze(symbol)
-
-                    if not res:
-                        continue
-
-                    now = time.time()
-
-                    if symbol in last_signal:
-
-                        if (
-                            now - last_signal[symbol]
-                            < COOLDOWN
-                        ):
+                        if not symbol:
                             continue
 
-                    last_signal[symbol] = now
+                        close_price = float(
+                            k.get("close", 0)
+                        )
 
-                    open_trades[
-                        symbol.upper()
-                    ] = res
+                        klines[symbol].append([
+                            k.get("start"),
+                            float(k.get("open", 0)),
+                            float(k.get("high", 0)),
+                            float(k.get("low", 0)),
+                            close_price,
+                            float(k.get("volume", 0))
+                        ])
 
-                    await bot.send_message(
-                        chat_id=CHAT_ID,
-                        text=signal_message(res)
-                    )
+                        # ================= CHECK TRADES =================
+                        await check_trade(
+                            bot,
+                            symbol.upper(),
+                            close_price
+                        )
+
+                        # ================= ANALYZE =================
+                        res = analyze(symbol)
+
+                        if not res:
+                            continue
+
+                        now = time.time()
+
+                        if symbol in last_signal:
+
+                            if (
+                                now - last_signal[symbol]
+                                < COOLDOWN
+                            ):
+                                continue
+
+                        last_signal[symbol] = now
+
+                        open_trades[
+                            symbol.upper()
+                        ] = res
+
+                        await bot.send_message(
+                            chat_id=CHAT_ID,
+                            text=signal_message(res)
+                        )
 
         except Exception as e:
 
@@ -393,11 +396,6 @@ async def main():
     await app.start()
 
     print("✅ BOT RUNNING")
-
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text="🔥 Fast Beast Mode Activated"
-    )
 
     asyncio.create_task(
         ws_loop(app.bot)
