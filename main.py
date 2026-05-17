@@ -27,17 +27,7 @@ SYMBOLS = [
     "BNBUSDT",
     "AVAXUSDT",
     "LINKUSDT",
-    "MATICUSDT",
-    "ARBUSDT",
-    "OPUSDT",
-    "INJUSDT",
-    "APTUSDT",
-    "SUIUSDT",
-    "SEIUSDT",
-    "NEARUSDT",
-    "ATOMUSDT",
-    "LTCUSDT",
-    "FILUSDT"
+    "MATICUSDT"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=50))
@@ -54,6 +44,7 @@ async def start_health():
     app.router.add_get("/", health)
 
     runner = web.AppRunner(app)
+
     await runner.setup()
 
     site = web.TCPSite(
@@ -99,7 +90,6 @@ def analyze(symbol):
             return None
 
         price = df["c"].iloc[-1]
-
         prev = df["c"].iloc[-2]
 
         move = ((price - prev) / prev) * 100
@@ -107,7 +97,7 @@ def analyze(symbol):
         volume = df["v"].iloc[-1]
 
         # أي حركة بسيطة
-        if abs(move) < 0.05:
+        if abs(move) < 0.03:
             return None
 
         if move > 0.5:
@@ -133,7 +123,7 @@ def analyze(symbol):
             "tp1": tp1,
             "tp2": tp2,
             "sl": sl,
-            "score": round(abs(move) * 100, 2),
+            "score": round(abs(move), 3),
             "volume": round(volume, 2),
             "tp1_hit": False
         }
@@ -154,7 +144,7 @@ def signal_message(r):
         f"🎯 TP1: {fmt(r['tp1'])}\n"
         f"🎯 TP2: {fmt(r['tp2'])}\n"
         f"🛑 SL: {fmt(r['sl'])}\n\n"
-        f"📊 Move Score: {r['score']}%\n"
+        f"📊 Move: {r['score']}%\n"
         f"📦 Volume: {r['volume']}"
     )
 
@@ -181,8 +171,7 @@ async def check_trade(bot, symbol, price):
             text=(
                 f"🎯 TP1 HIT\n\n"
                 f"{symbol}\n"
-                f"Price: {fmt(price)}\n\n"
-                f"🛡 SL moved to entry"
+                f"Price: {fmt(price)}"
             )
         )
 
@@ -194,8 +183,7 @@ async def check_trade(bot, symbol, price):
             text=(
                 f"🚀 TP2 HIT\n\n"
                 f"{symbol}\n"
-                f"Price: {fmt(price)}\n\n"
-                f"✅ Trade completed"
+                f"Price: {fmt(price)}"
             )
         )
 
@@ -207,7 +195,7 @@ async def check_trade(bot, symbol, price):
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                f"🛑 STOP LOSS HIT\n\n"
+                f"🛑 SL HIT\n\n"
                 f"{symbol}\n"
                 f"Price: {fmt(price)}"
             )
@@ -241,12 +229,20 @@ async def ws_loop(bot):
                 for s in SYMBOLS:
                     args.append(f"kline.1.{s}")
 
-                await ws.send(json.dumps({
+                sub = {
                     "op": "subscribe",
                     "args": args
-                }))
+                }
 
-                async for raw in ws:
+                await ws.send(json.dumps(sub))
+
+                print("SUBSCRIBED:", args)
+
+                while True:
+
+                    raw = await ws.recv()
+
+                    print("RAW:", raw[:300])
 
                     data = json.loads(raw)
 
@@ -310,14 +306,14 @@ async def ws_loop(bot):
                             len(klines[symbol])
                         )
 
-                        # ================= CHECK TRADES =================
+                        # CHECK TRADE
                         await check_trade(
                             bot,
                             symbol.upper(),
                             close_price
                         )
 
-                        # ================= ANALYZE =================
+                        # ANALYZE
                         res = analyze(symbol)
 
                         if not res:
@@ -358,6 +354,7 @@ async def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     await app.initialize()
+
     await app.start()
 
     print("✅ BOT RUNNING")
