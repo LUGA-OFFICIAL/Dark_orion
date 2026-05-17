@@ -1,16 +1,12 @@
 import os
 import asyncio
-import json
-import time
-from collections import defaultdict, deque
-
+import requests
 import pandas as pd
 import ta
-import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION DAILY ENGINE")
+print("🔥 ORION REST ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -18,7 +14,6 @@ PORT = int(os.getenv("PORT", "8080"))
 
 COOLDOWN = 900
 
-# ================= COINS =================
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -47,7 +42,6 @@ SYMBOLS = [
     "ICPUSDT"
 ]
 
-klines = defaultdict(lambda: deque(maxlen=120))
 last_signal = {}
 open_trades = {}
 
@@ -86,56 +80,85 @@ def fmt(x):
 
     return f"{x:.8f}"
 
+# ================= GET DATA =================
+def get_klines(symbol):
+
+    try:
+
+        url = (
+            f"https://api.bybit.com/v5/market/kline"
+            f"?category=spot"
+            f"&symbol={symbol}"
+            f"&interval=1"
+            f"&limit=50"
+        )
+
+        r = requests.get(url, timeout=10)
+
+        data = r.json()
+
+        rows = data["result"]["list"]
+
+        rows.reverse()
+
+        df = pd.DataFrame(rows)
+
+        df = df.iloc[:, :6]
+
+        df.columns = [
+            "time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+
+        df = df.astype(float)
+
+        return df
+
+    except Exception as e:
+
+        print("DATA ERROR:", e)
+
+        return None
+
 # ================= ANALYZE =================
 def analyze(symbol):
 
     try:
 
-        data = list(klines[symbol])
+        df = get_klines(symbol)
 
-        if len(data) < 12:
+        if df is None or len(df) < 20:
             return None
 
-        df = pd.DataFrame(
-            data,
-            columns=["t", "o", "h", "l", "c", "v"]
-        )
+        price = df["close"].iloc[-1]
 
-        df = df.astype(float)
-
-        df = df.dropna()
-
-        if len(df) < 12:
-            return None
-
-        price = df["c"].iloc[-1]
-
-        prev = df["c"].iloc[-2]
+        prev = df["close"].iloc[-2]
 
         move = ((price - prev) / prev) * 100
 
-        volume = df["v"].iloc[-1]
+        volume = df["volume"].iloc[-1]
 
-        # EMA
         ema9 = ta.trend.EMAIndicator(
-            df["c"],
+            df["close"],
             9
         ).ema_indicator().iloc[-1]
 
         ema21 = ta.trend.EMAIndicator(
-            df["c"],
+            df["close"],
             21
         ).ema_indicator().iloc[-1]
 
-        # RSI
         rsi = ta.momentum.RSIIndicator(
-            df["c"],
+            df["close"],
             14
         ).rsi().iloc[-1]
 
-        # AVG VOL
         vol_avg = (
-            df["v"]
+            df["volume"]
             .rolling(10)
             .mean()
             .iloc[-1]
@@ -158,6 +181,7 @@ def analyze(symbol):
         # ================= SIGNAL LEVEL =================
 
         if move > 2:
+
             grade = "🐋 SNIPER"
 
             tp1 = price * 1.02
@@ -165,6 +189,7 @@ def analyze(symbol):
             sl = price * 0.99
 
         elif move > 1:
+
             grade = "🔥 HIGH"
 
             tp1 = price * 1.015
@@ -172,6 +197,7 @@ def analyze(symbol):
             sl = price * 0.992
 
         elif move > 0.3:
+
             grade = "⚡ MEDIUM"
 
             tp1 = price * 1.008
@@ -179,6 +205,7 @@ def analyze(symbol):
             sl = price * 0.994
 
         else:
+
             grade = "🎯 SCALP"
 
             tp1 = price * 1.003
@@ -186,13 +213,13 @@ def analyze(symbol):
             sl = price * 0.997
 
         return {
-            "symbol": symbol.upper(),
+            "symbol": symbol,
             "grade": grade,
             "price": price,
             "tp1": tp1,
             "tp2": tp2,
             "sl": sl,
-            "score": round(abs(move), 3),
+            "move": round(move, 3),
             "volume": round(volume, 2),
             "rsi": round(rsi, 1),
             "tp1_hit": False
@@ -208,234 +235,140 @@ def analyze(symbol):
 def signal_message(r):
 
     return (
-        f"🚨 ORION SMART SIGNAL\n\n"
+        f"🚨 ORION SIGNAL\n\n"
 
-        f"🪙 Coin: {r['symbol']}\n"
-        f"📊 Type: {r['grade']}\n\n"
+        f"🪙 {r['symbol']}\n"
+        f"📊 {r['grade']}\n\n"
 
-        f"💰 Entry Zone:\n"
-        f"{fmt(r['price'])}\n\n"
+        f"💰 Entry: {fmt(r['price'])}\n"
+        f"🎯 TP1: {fmt(r['tp1'])}\n"
+        f"🎯 TP2: {fmt(r['tp2'])}\n"
+        f"🛑 SL: {fmt(r['sl'])}\n\n"
 
-        f"🎯 Targets:\n"
-        f"TP1 → {fmt(r['tp1'])}\n"
-        f"TP2 → {fmt(r['tp2'])}\n\n"
-
-        f"🛑 Stop Loss:\n"
-        f"{fmt(r['sl'])}\n\n"
-
-        f"📈 Move:\n"
-        f"{r['score']}%\n\n"
-
-        f"📦 Volume:\n"
-        f"{r['volume']}\n\n"
-
-        f"📊 RSI:\n"
-        f"{r['rsi']}\n\n"
-
-        f"⚠️ Risk Management Required"
+        f"📈 Move: {r['move']}%\n"
+        f"📦 Volume: {r['volume']}\n"
+        f"📊 RSI: {r['rsi']}"
     )
 
-# ================= CHECK TP/SL =================
-async def check_trade(bot, symbol, price):
+# ================= TP/SL =================
+async def check_trade(bot, symbol):
 
     if symbol not in open_trades:
         return
 
-    trade = open_trades[symbol]
+    try:
 
-    # TP1
-    if (
-        not trade["tp1_hit"]
-        and price >= trade["tp1"]
-    ):
+        df = get_klines(symbol)
 
-        trade["tp1_hit"] = True
+        if df is None:
+            return
 
-        trade["sl"] = trade["price"]
+        price = df["close"].iloc[-1]
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
-                f"🎯 TARGET 1 HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"🛡 Move SL To Entry"
+        trade = open_trades[symbol]
+
+        # TP1
+        if (
+            not trade["tp1_hit"]
+            and price >= trade["tp1"]
+        ):
+
+            trade["tp1_hit"] = True
+
+            trade["sl"] = trade["price"]
+
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=(
+                    f"🎯 TARGET 1 HIT\n\n"
+                    f"🪙 {symbol}\n"
+                    f"💰 {fmt(price)}\n\n"
+                    f"🛡 SL moved to entry"
+                )
             )
-        )
 
-    # TP2
-    if price >= trade["tp2"]:
+        # TP2
+        if price >= trade["tp2"]:
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
-                f"🚀 FINAL TARGET HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"✅ Trade Completed"
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=(
+                    f"🚀 FINAL TARGET HIT\n\n"
+                    f"🪙 {symbol}\n"
+                    f"💰 {fmt(price)}\n\n"
+                    f"✅ Trade Completed"
+                )
             )
-        )
 
-        del open_trades[symbol]
+            del open_trades[symbol]
 
-    # SL
-    elif price <= trade["sl"]:
+        # SL
+        elif price <= trade["sl"]:
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
-                f"🛑 STOP LOSS HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"⚠️ Trade Closed"
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=(
+                    f"🛑 STOP LOSS HIT\n\n"
+                    f"🪙 {symbol}\n"
+                    f"💰 {fmt(price)}"
+                )
             )
-        )
 
-        del open_trades[symbol]
+            del open_trades[symbol]
 
-# ================= WEBSOCKET =================
-async def ws_loop(bot):
+    except Exception as e:
 
-    url = "wss://stream.bybit.com/v5/public/spot"
+        print("CHECK ERROR:", e)
+
+# ================= SIGNAL LOOP =================
+async def signal_loop(bot):
 
     while True:
 
         try:
 
-            async with websockets.connect(
-                url,
-                ping_interval=20
-            ) as ws:
+            for symbol in SYMBOLS:
 
-                print("🔥 BYBIT CONNECTED")
+                print("CHECKING:", symbol)
+
+                # CHECK OPEN TRADES
+                await check_trade(bot, symbol)
+
+                # ANALYZE
+                res = analyze(symbol)
+
+                if not res:
+                    continue
+
+                now = asyncio.get_event_loop().time()
+
+                if symbol in last_signal:
+
+                    if (
+                        now - last_signal[symbol]
+                        < COOLDOWN
+                    ):
+                        continue
+
+                last_signal[symbol] = now
+
+                open_trades[symbol] = res
 
                 await bot.send_message(
                     chat_id=CHAT_ID,
-                    text="🔥 Orion Daily Engine Activated"
+                    text=signal_message(res)
                 )
 
-                args = []
+                print("SIGNAL:", symbol)
 
-                for s in SYMBOLS:
-                    args.append(f"kline.1.{s}")
-
-                # IMPORTANT
-                await ws.send(json.dumps({
-                    "req_id": "orion",
-                    "op": "subscribe",
-                    "args": args
-                }))
-
-                print("✅ SUBSCRIBED")
-
-                while True:
-
-                    raw = await ws.recv()
-
-                    print(raw)
-
-                    data = json.loads(raw)
-
-                    # Ignore non-topic packets
-                    if "topic" not in data:
-                        continue
-
-                    if "kline" not in data["topic"]:
-                        continue
-
-                    if "data" not in data:
-                        continue
-
-                    topic = data.get("topic", "")
-
-                    print("TOPIC:", topic)
-
-                    symbol = (
-                        topic
-                        .replace("kline.1.", "")
-                        .lower()
-                    )
-
-                    for k in data["data"]:
-
-                        print("PROCESSING DATA")
-
-                        close_price = float(
-                            k.get("close") or 0
-                        )
-
-                        open_price = float(
-                            k.get("open") or 0
-                        )
-
-                        high_price = float(
-                            k.get("high") or 0
-                        )
-
-                        low_price = float(
-                            k.get("low") or 0
-                        )
-
-                        volume = float(
-                            k.get("volume") or 0
-                        )
-
-                        klines[symbol].append([
-                            time.time(),
-                            open_price,
-                            high_price,
-                            low_price,
-                            close_price,
-                            volume
-                        ])
-
-                        print(
-                            "CANDLES:",
-                            symbol,
-                            len(klines[symbol])
-                        )
-
-                        # TP/SL check
-                        await check_trade(
-                            bot,
-                            symbol.upper(),
-                            close_price
-                        )
-
-                        print("ANALYZING:", symbol)
-
-                        # Analyze
-                        res = analyze(symbol)
-
-                        if not res:
-                            continue
-
-                        now = time.time()
-
-                        if symbol in last_signal:
-
-                            if (
-                                now - last_signal[symbol]
-                                < COOLDOWN
-                            ):
-                                continue
-
-                        last_signal[symbol] = now
-
-                        open_trades[
-                            symbol.upper()
-                        ] = res
-
-                        await bot.send_message(
-                            chat_id=CHAT_ID,
-                            text=signal_message(res)
-                        )
+                await asyncio.sleep(2)
 
         except Exception as e:
 
-            print("WS ERROR:", e)
+            print("LOOP ERROR:", e)
 
-            await asyncio.sleep(5)
+        # كل دقيقة
+        await asyncio.sleep(60)
 
 # ================= MAIN =================
 async def main():
@@ -450,8 +383,15 @@ async def main():
 
     print("✅ BOT RUNNING")
 
+    bot = app.bot
+
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text="🔥 ORION REST ENGINE ACTIVATED"
+    )
+
     asyncio.create_task(
-        ws_loop(app.bot)
+        signal_loop(bot)
     )
 
     await asyncio.Event().wait()
