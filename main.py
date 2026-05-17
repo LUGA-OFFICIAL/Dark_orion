@@ -101,27 +101,38 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # تجاهل الحركات الصغيرة جدًا
+        # تجاهل الحركات الصغيرة
         if abs(move) < 0.08:
             return None
 
         # ================= GRADES =================
-        if move > 0.5:
+
+        if move > 1.5:
+
             grade = "🐋 SNIPER"
 
-        elif move > 0.2:
+            tp1 = price * 1.03
+            tp2 = price * 1.06
+            sl = price * 0.99
+
+        elif move > 0.7:
+
             grade = "🔥 HIGH"
 
-        elif move > 0:
+            tp1 = price * 1.02
+            tp2 = price * 1.04
+            sl = price * 0.992
+
+        elif move > 0.25:
+
             grade = "⚡ MEDIUM"
 
-        else:
-            grade = "🎯 SCALP"
+            tp1 = price * 1.01
+            tp2 = price * 1.02
+            sl = price * 0.995
 
-        # أهداف أقوى
-        tp1 = price * 1.005
-        tp2 = price * 1.01
-        sl = price * 0.995
+        else:
+            return None
 
         return {
             "symbol": symbol.upper(),
@@ -146,11 +157,14 @@ def signal_message(r):
 
     return (
         f"{r['grade']} SIGNAL\n\n"
+
         f"🪙 {r['symbol']}\n\n"
+
         f"💰 Entry: {fmt(r['price'])}\n"
         f"🎯 TP1: {fmt(r['tp1'])}\n"
         f"🎯 TP2: {fmt(r['tp2'])}\n"
         f"🛑 SL: {fmt(r['sl'])}\n\n"
+
         f"📊 Move: {r['score']}%\n"
         f"📦 Volume: {r['volume']}"
     )
@@ -255,7 +269,7 @@ async def ws_loop(bot):
                     if "data" not in data:
                         continue
 
-                    # استخراج الرمز من topic
+                    # استخراج الرمز
                     topic = data.get("topic", "")
 
                     symbol = (
