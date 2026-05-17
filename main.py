@@ -16,7 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# منع تكرار نفس العملة بسرعة
+# منع تكرار الإشارات لنفس العملة
 COOLDOWN = 900
 
 # ================= COINS =================
@@ -94,7 +94,8 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        if len(data) < 20:
+        # أسرع بداية للتحليل
+        if len(data) < 12:
             return None
 
         df = pd.DataFrame(
@@ -106,7 +107,7 @@ def analyze(symbol):
 
         df = df.dropna()
 
-        if len(df) < 20:
+        if len(df) < 12:
             return None
 
         price = df["c"].iloc[-1]
@@ -144,7 +145,7 @@ def analyze(symbol):
 
         # ================= FILTERS =================
 
-        # اتجاه
+        # الاتجاه
         if ema9 <= ema21:
             return None
 
@@ -152,12 +153,12 @@ def analyze(symbol):
         if rsi > 78 or rsi < 30:
             return None
 
-        # حجم
-        if volume < vol_avg * 0.8:
+        # حجم التداول
+        if volume < vol_avg * 0.5:
             return None
 
-        # تجاهل الحركات الضعيفة جدًا
-        if move < 0.08:
+        # تجاهل الحركات الصغيرة جدًا
+        if move < 0.05:
             return None
 
         # ================= SIGNAL LEVEL =================
@@ -183,7 +184,7 @@ def analyze(symbol):
             tp2 = price * 1.015
             sl = price * 0.994
 
-        elif move > 0.08:
+        elif move > 0.05:
             grade = "🎯 SCALP"
 
             tp1 = price * 1.003
