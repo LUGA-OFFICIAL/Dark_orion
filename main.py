@@ -116,7 +116,7 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # ================= EMA =================
+        # EMA
         ema9 = ta.trend.EMAIndicator(
             df["c"],
             9
@@ -127,13 +127,13 @@ def analyze(symbol):
             21
         ).ema_indicator().iloc[-1]
 
-        # ================= RSI =================
+        # RSI
         rsi = ta.momentum.RSIIndicator(
             df["c"],
             14
         ).rsi().iloc[-1]
 
-        # ================= VOLUME =================
+        # AVG VOL
         vol_avg = (
             df["v"]
             .rolling(10)
@@ -143,19 +143,15 @@ def analyze(symbol):
 
         # ================= FILTERS =================
 
-        # اتجاه صاعد فقط
         if ema9 <= ema21:
             return None
 
-        # RSI
         if rsi > 78 or rsi < 30:
             return None
 
-        # حجم تداول
         if volume < vol_avg * 0.5:
             return None
 
-        # تجاهل الحركات الصغيرة جدًا
         if move < 0.05:
             return None
 
@@ -239,7 +235,7 @@ def signal_message(r):
         f"⚠️ Risk Management Required"
     )
 
-# ================= CHECK TRADES =================
+# ================= CHECK TP/SL =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -247,7 +243,7 @@ async def check_trade(bot, symbol, price):
 
     trade = open_trades[symbol]
 
-    # ================= TP1 =================
+    # TP1
     if (
         not trade["tp1_hit"]
         and price >= trade["tp1"]
@@ -267,7 +263,7 @@ async def check_trade(bot, symbol, price):
             )
         )
 
-    # ================= TP2 =================
+    # TP2
     if price >= trade["tp2"]:
 
         await bot.send_message(
@@ -282,7 +278,7 @@ async def check_trade(bot, symbol, price):
 
         del open_trades[symbol]
 
-    # ================= STOP LOSS =================
+    # SL
     elif price <= trade["sl"]:
 
         await bot.send_message(
@@ -323,7 +319,9 @@ async def ws_loop(bot):
                 for s in SYMBOLS:
                     args.append(f"kline.1.{s}")
 
+                # IMPORTANT
                 await ws.send(json.dumps({
+                    "req_id": "orion",
                     "op": "subscribe",
                     "args": args
                 }))
@@ -334,11 +332,11 @@ async def ws_loop(bot):
 
                     raw = await ws.recv()
 
-                    print("RAW RECEIVED")
+                    print(raw)
 
                     data = json.loads(raw)
 
-                    # تجاهل الرسائل غير المهمة
+                    # Ignore non-topic packets
                     if "topic" not in data:
                         continue
 
@@ -397,7 +395,7 @@ async def ws_loop(bot):
                             len(klines[symbol])
                         )
 
-                        # ================= CHECK TRADE =================
+                        # TP/SL check
                         await check_trade(
                             bot,
                             symbol.upper(),
@@ -406,7 +404,7 @@ async def ws_loop(bot):
 
                         print("ANALYZING:", symbol)
 
-                        # ================= ANALYZE =================
+                        # Analyze
                         res = analyze(symbol)
 
                         if not res:
