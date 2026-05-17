@@ -1,8 +1,10 @@
 import os
+import json
 import asyncio
 import requests
 import pandas as pd
 import ta
+
 from aiohttp import web
 from telegram.ext import Application
 
@@ -93,9 +95,21 @@ def get_klines(symbol):
             f"&limit=50"
         )
 
-        r = requests.get(url, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-        data = r.json()
+        r = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
+
+        text = r.text
+
+        print(text[:120])
+
+        data = json.loads(text)
 
         rows = data["result"]["list"]
 
@@ -164,8 +178,7 @@ def analyze(symbol):
             .iloc[-1]
         )
 
-        # ================= FILTERS =================
-
+        # FILTERS
         if ema9 <= ema21:
             return None
 
@@ -178,8 +191,7 @@ def analyze(symbol):
         if move < 0.05:
             return None
 
-        # ================= SIGNAL LEVEL =================
-
+        # SIGNAL LEVELS
         if move > 2:
 
             grade = "🐋 SNIPER"
@@ -320,7 +332,7 @@ async def check_trade(bot, symbol):
 
         print("CHECK ERROR:", e)
 
-# ================= SIGNAL LOOP =================
+# ================= LOOP =================
 async def signal_loop(bot):
 
     while True:
@@ -331,10 +343,11 @@ async def signal_loop(bot):
 
                 print("CHECKING:", symbol)
 
-                # CHECK OPEN TRADES
-                await check_trade(bot, symbol)
+                await check_trade(
+                    bot,
+                    symbol
+                )
 
-                # ANALYZE
                 res = analyze(symbol)
 
                 if not res:
@@ -367,7 +380,6 @@ async def signal_loop(bot):
 
             print("LOOP ERROR:", e)
 
-        # كل دقيقة
         await asyncio.sleep(60)
 
 # ================= MAIN =================
