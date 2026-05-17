@@ -106,18 +106,38 @@ def get_klines(symbol):
 
         data = r.json()
 
-        df = pd.DataFrame(data)
+        print(data)
 
-        df = df.iloc[:, :6]
+        # لازم تكون list
+        if not isinstance(data, list):
+            return None
 
-        df.columns = [
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "qav",
+                "trades",
+                "tbav",
+                "tqav",
+                "ignore"
+            ]
+        )
+
+        df = df[[
             "time",
             "open",
             "high",
             "low",
             "close",
             "volume"
-        ]
+        ]]
 
         df = df.astype(float)
 
@@ -147,7 +167,7 @@ def analyze(symbol):
 
         volume = df["volume"].iloc[-1]
 
-        # ================= EMA =================
+        # EMA
         ema9 = ta.trend.EMAIndicator(
             df["close"],
             9
@@ -158,13 +178,13 @@ def analyze(symbol):
             21
         ).ema_indicator().iloc[-1]
 
-        # ================= RSI =================
+        # RSI
         rsi = ta.momentum.RSIIndicator(
             df["close"],
             14
         ).rsi().iloc[-1]
 
-        # ================= AVG VOL =================
+        # AVG VOL
         vol_avg = (
             df["volume"]
             .rolling(10)
@@ -190,7 +210,7 @@ def analyze(symbol):
         if move < 0.05:
             return None
 
-        # ================= SIGNAL LEVEL =================
+        # ================= SIGNAL LEVELS =================
 
         if move > 2:
 
