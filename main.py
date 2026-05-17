@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 import requests
 import pandas as pd
@@ -8,7 +7,7 @@ import ta
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION REST ENGINE")
+print("🔥 ORION BINANCE ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -16,6 +15,7 @@ PORT = int(os.getenv("PORT", "8080"))
 
 COOLDOWN = 900
 
+# ================= COINS =================
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -82,16 +82,15 @@ def fmt(x):
 
     return f"{x:.8f}"
 
-# ================= GET DATA =================
+# ================= GET KLINES =================
 def get_klines(symbol):
 
     try:
 
         url = (
-            f"https://api.bybit.com/v5/market/kline"
-            f"?category=spot"
-            f"&symbol={symbol}"
-            f"&interval=1"
+            f"https://api.binance.com/api/v3/klines"
+            f"?symbol={symbol}"
+            f"&interval=1m"
             f"&limit=50"
         )
 
@@ -105,17 +104,9 @@ def get_klines(symbol):
             timeout=10
         )
 
-        text = r.text
+        data = r.json()
 
-        print(text[:120])
-
-        data = json.loads(text)
-
-        rows = data["result"]["list"]
-
-        rows.reverse()
-
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(data)
 
         df = df.iloc[:, :6]
 
@@ -156,6 +147,7 @@ def analyze(symbol):
 
         volume = df["volume"].iloc[-1]
 
+        # ================= EMA =================
         ema9 = ta.trend.EMAIndicator(
             df["close"],
             9
@@ -166,11 +158,13 @@ def analyze(symbol):
             21
         ).ema_indicator().iloc[-1]
 
+        # ================= RSI =================
         rsi = ta.momentum.RSIIndicator(
             df["close"],
             14
         ).rsi().iloc[-1]
 
+        # ================= AVG VOL =================
         vol_avg = (
             df["volume"]
             .rolling(10)
@@ -178,20 +172,26 @@ def analyze(symbol):
             .iloc[-1]
         )
 
-        # FILTERS
+        # ================= FILTERS =================
+
+        # اتجاه
         if ema9 <= ema21:
             return None
 
+        # RSI
         if rsi > 78 or rsi < 30:
             return None
 
+        # حجم
         if volume < vol_avg * 0.5:
             return None
 
+        # حركة
         if move < 0.05:
             return None
 
-        # SIGNAL LEVELS
+        # ================= SIGNAL LEVEL =================
+
         if move > 2:
 
             grade = "🐋 SNIPER"
@@ -343,11 +343,13 @@ async def signal_loop(bot):
 
                 print("CHECKING:", symbol)
 
+                # CHECK TP/SL
                 await check_trade(
                     bot,
                     symbol
                 )
 
+                # ANALYZE
                 res = analyze(symbol)
 
                 if not res:
@@ -380,6 +382,7 @@ async def signal_loop(bot):
 
             print("LOOP ERROR:", e)
 
+        # كل دقيقة
         await asyncio.sleep(60)
 
 # ================= MAIN =================
@@ -399,7 +402,7 @@ async def main():
 
     await bot.send_message(
         chat_id=CHAT_ID,
-        text="🔥 ORION REST ENGINE ACTIVATED"
+        text="🔥 ORION BINANCE ENGINE ACTIVATED"
     )
 
     asyncio.create_task(
