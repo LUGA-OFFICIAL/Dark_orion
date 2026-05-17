@@ -15,6 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
+# وقت الانتظار بين إشارات نفس العملة
 COOLDOWN = 180
 
 SYMBOLS = [
@@ -41,6 +42,7 @@ async def health(request):
 async def start_health():
 
     app = web.Application()
+
     app.router.add_get("/", health)
 
     runner = web.AppRunner(app)
@@ -84,22 +86,25 @@ def analyze(symbol):
         )
 
         df = df.astype(float)
+
         df = df.dropna()
 
         if len(df) < 3:
             return None
 
         price = df["c"].iloc[-1]
+
         prev = df["c"].iloc[-2]
 
         move = ((price - prev) / prev) * 100
 
         volume = df["v"].iloc[-1]
 
-        # أي حركة بسيطة
+        # تجاهل الحركة الضعيفة جدًا
         if abs(move) < 0.03:
             return None
 
+        # ================= GRADES =================
         if move > 0.5:
             grade = "🐋 SNIPER"
 
@@ -189,7 +194,7 @@ async def check_trade(bot, symbol, price):
 
         del open_trades[symbol]
 
-    # SL
+    # STOP LOSS
     elif price <= trade["sl"]:
 
         await bot.send_message(
@@ -242,54 +247,50 @@ async def ws_loop(bot):
 
                     raw = await ws.recv()
 
-                    print("RAW:", raw[:300])
+                    print("RAW:", raw[:200])
 
                     data = json.loads(raw)
 
                     if "data" not in data:
                         continue
 
+                    # استخراج الرمز من topic
+                    topic = data.get("topic", "")
+
+                    symbol = (
+                        topic
+                        .replace("kline.1.", "")
+                        .lower()
+                    )
+
+                    print("SYMBOL:", symbol)
+
                     for k in data["data"]:
-
-                        symbol = (
-                            k.get("symbol", "")
-                            .lower()
-                        )
-
-                        if not symbol:
-                            continue
 
                         close_price = float(
                             k.get("close")
-                            or k.get("c")
                             or 0
                         )
 
                         open_price = float(
                             k.get("open")
-                            or k.get("o")
                             or 0
                         )
 
                         high_price = float(
                             k.get("high")
-                            or k.get("h")
                             or 0
                         )
 
                         low_price = float(
                             k.get("low")
-                            or k.get("l")
                             or 0
                         )
 
                         volume = float(
                             k.get("volume")
-                            or k.get("v")
                             or 0
                         )
-
-                        print(symbol, close_price)
 
                         klines[symbol].append([
                             time.time(),
@@ -306,14 +307,14 @@ async def ws_loop(bot):
                             len(klines[symbol])
                         )
 
-                        # CHECK TRADE
+                        # ================= CHECK TRADE =================
                         await check_trade(
                             bot,
                             symbol.upper(),
                             close_price
                         )
 
-                        # ANALYZE
+                        # ================= ANALYZE =================
                         res = analyze(symbol)
 
                         if not res:
