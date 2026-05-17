@@ -1,5 +1,7 @@
 python-telegram-bot==20.7
-websockets
+aiohttp
 pandas
 ta
-aiohttp
+requests
+openpyxl
+numpy
