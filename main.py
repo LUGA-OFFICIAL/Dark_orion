@@ -335,6 +335,8 @@ async def ws_loop(bot):
 
                     raw = await ws.recv()
 
+                    print("RAW RECEIVED")
+
                     data = json.loads(raw)
 
                     if "data" not in data:
@@ -350,11 +352,7 @@ async def ws_loop(bot):
 
                     for k in data["data"]:
 
-                        # تحليل فقط بعد إغلاق الشمعة
-                        if not k.get("confirm", False):
-                            continue
-
-                        print("LIVE DATA RECEIVED")
+                        print("PROCESSING DATA")
 
                         close_price = float(
                             k.get("close") or 0
@@ -376,8 +374,6 @@ async def ws_loop(bot):
                             k.get("volume") or 0
                         )
 
-                        print("RECEIVED:", symbol)
-
                         klines[symbol].append([
                             time.time(),
                             open_price,
@@ -393,7 +389,7 @@ async def ws_loop(bot):
                             len(klines[symbol])
                         )
 
-                        # ================= CHECK TRADES =================
+                        # ================= CHECK TRADE =================
                         await check_trade(
                             bot,
                             symbol.upper(),
