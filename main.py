@@ -94,7 +94,6 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        # أسرع بداية للتحليل
         if len(data) < 12:
             return None
 
@@ -145,7 +144,7 @@ def analyze(symbol):
 
         # ================= FILTERS =================
 
-        # الاتجاه
+        # اتجاه صاعد فقط
         if ema9 <= ema21:
             return None
 
@@ -153,7 +152,7 @@ def analyze(symbol):
         if rsi > 78 or rsi < 30:
             return None
 
-        # حجم التداول
+        # حجم تداول
         if volume < vol_avg * 0.5:
             return None
 
@@ -184,15 +183,12 @@ def analyze(symbol):
             tp2 = price * 1.015
             sl = price * 0.994
 
-        elif move > 0.05:
+        else:
             grade = "🎯 SCALP"
 
             tp1 = price * 1.003
             tp2 = price * 1.006
             sl = price * 0.997
-
-        else:
-            return None
 
         return {
             "symbol": symbol.upper(),
@@ -354,6 +350,12 @@ async def ws_loop(bot):
 
                     for k in data["data"]:
 
+                        # تحليل فقط بعد إغلاق الشمعة
+                        if not k.get("confirm", False):
+                            continue
+
+                        print("LIVE DATA RECEIVED")
+
                         close_price = float(
                             k.get("close") or 0
                         )
@@ -374,6 +376,8 @@ async def ws_loop(bot):
                             k.get("volume") or 0
                         )
 
+                        print("RECEIVED:", symbol)
+
                         klines[symbol].append([
                             time.time(),
                             open_price,
@@ -383,12 +387,20 @@ async def ws_loop(bot):
                             volume
                         ])
 
-                        # ================= CHECK TRADE =================
+                        print(
+                            "CANDLES:",
+                            symbol,
+                            len(klines[symbol])
+                        )
+
+                        # ================= CHECK TRADES =================
                         await check_trade(
                             bot,
                             symbol.upper(),
                             close_price
                         )
+
+                        print("ANALYZING:", symbol)
 
                         # ================= ANALYZE =================
                         res = analyze(symbol)
