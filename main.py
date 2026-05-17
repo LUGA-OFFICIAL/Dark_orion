@@ -16,7 +16,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# منع تكرار الإشارات لنفس العملة
 COOLDOWN = 900
 
 # ================= COINS =================
@@ -339,10 +338,19 @@ async def ws_loop(bot):
 
                     data = json.loads(raw)
 
+                    # تجاهل الرسائل غير المهمة
+                    if "topic" not in data:
+                        continue
+
+                    if "kline" not in data["topic"]:
+                        continue
+
                     if "data" not in data:
                         continue
 
                     topic = data.get("topic", "")
+
+                    print("TOPIC:", topic)
 
                     symbol = (
                         topic
