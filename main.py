@@ -5,20 +5,21 @@ import time
 from collections import defaultdict, deque
 
 import pandas as pd
+import ta
 import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION SMART ENGINE")
+print("🔥 ORION DAILY ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# وقت الانتظار بين إشارات نفس العملة
-COOLDOWN = 300
+# منع تكرار نفس العملة بسرعة
+COOLDOWN = 900
 
-# العملات
+# ================= COINS =================
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -47,7 +48,7 @@ SYMBOLS = [
     "ICPUSDT"
 ]
 
-klines = defaultdict(lambda: deque(maxlen=50))
+klines = defaultdict(lambda: deque(maxlen=120))
 last_signal = {}
 open_trades = {}
 
@@ -93,7 +94,7 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        if len(data) < 3:
+        if len(data) < 20:
             return None
 
         df = pd.DataFrame(
@@ -105,7 +106,7 @@ def analyze(symbol):
 
         df = df.dropna()
 
-        if len(df) < 3:
+        if len(df) < 20:
             return None
 
         price = df["c"].iloc[-1]
@@ -116,26 +117,81 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
+        # ================= EMA =================
+        ema9 = ta.trend.EMAIndicator(
+            df["c"],
+            9
+        ).ema_indicator().iloc[-1]
+
+        ema21 = ta.trend.EMAIndicator(
+            df["c"],
+            21
+        ).ema_indicator().iloc[-1]
+
+        # ================= RSI =================
+        rsi = ta.momentum.RSIIndicator(
+            df["c"],
+            14
+        ).rsi().iloc[-1]
+
+        # ================= VOLUME =================
+        vol_avg = (
+            df["v"]
+            .rolling(10)
+            .mean()
+            .iloc[-1]
+        )
+
+        # ================= FILTERS =================
+
+        # اتجاه
+        if ema9 <= ema21:
+            return None
+
+        # RSI
+        if rsi > 78 or rsi < 30:
+            return None
+
+        # حجم
+        if volume < vol_avg * 0.8:
+            return None
+
         # تجاهل الحركات الضعيفة جدًا
-        if abs(move) < 0.03:
+        if move < 0.08:
             return None
 
         # ================= SIGNAL LEVEL =================
-        if move > 0.5:
+
+        if move > 2:
             grade = "🐋 SNIPER"
 
-        elif move > 0.2:
+            tp1 = price * 1.02
+            tp2 = price * 1.05
+            sl = price * 0.99
+
+        elif move > 1:
             grade = "🔥 HIGH"
 
-        elif move > 0:
+            tp1 = price * 1.015
+            tp2 = price * 1.03
+            sl = price * 0.992
+
+        elif move > 0.3:
             grade = "⚡ MEDIUM"
 
-        else:
+            tp1 = price * 1.008
+            tp2 = price * 1.015
+            sl = price * 0.994
+
+        elif move > 0.08:
             grade = "🎯 SCALP"
 
-        tp1 = price * 1.003
-        tp2 = price * 1.006
-        sl = price * 0.997
+            tp1 = price * 1.003
+            tp2 = price * 1.006
+            sl = price * 0.997
+
+        else:
+            return None
 
         return {
             "symbol": symbol.upper(),
@@ -146,6 +202,7 @@ def analyze(symbol):
             "sl": sl,
             "score": round(abs(move), 3),
             "volume": round(volume, 2),
+            "rsi": round(rsi, 1),
             "tp1_hit": False
         }
 
@@ -155,7 +212,7 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL MESSAGE =================
+# ================= MESSAGE =================
 def signal_message(r):
 
     return (
@@ -174,16 +231,19 @@ def signal_message(r):
         f"🛑 Stop Loss:\n"
         f"{fmt(r['sl'])}\n\n"
 
-        f"📈 Market Move:\n"
+        f"📈 Move:\n"
         f"{r['score']}%\n\n"
 
         f"📦 Volume:\n"
         f"{r['volume']}\n\n"
 
+        f"📊 RSI:\n"
+        f"{r['rsi']}\n\n"
+
         f"⚠️ Risk Management Required"
     )
 
-# ================= CHECK TRADE =================
+# ================= CHECK TRADES =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -226,7 +286,7 @@ async def check_trade(bot, symbol, price):
 
         del open_trades[symbol]
 
-    # ================= SL =================
+    # ================= STOP LOSS =================
     elif price <= trade["sl"]:
 
         await bot.send_message(
@@ -259,7 +319,7 @@ async def ws_loop(bot):
 
                 await bot.send_message(
                     chat_id=CHAT_ID,
-                    text="🔥 Orion Smart Engine Activated"
+                    text="🔥 Orion Daily Engine Activated"
                 )
 
                 args = []
@@ -267,14 +327,12 @@ async def ws_loop(bot):
                 for s in SYMBOLS:
                     args.append(f"kline.1.{s}")
 
-                sub = {
+                await ws.send(json.dumps({
                     "op": "subscribe",
                     "args": args
-                }
+                }))
 
-                await ws.send(json.dumps(sub))
-
-                print("SUBSCRIBED:", args)
+                print("✅ SUBSCRIBED")
 
                 while True:
 
@@ -324,13 +382,7 @@ async def ws_loop(bot):
                             volume
                         ])
 
-                        print(
-                            "DATA:",
-                            symbol,
-                            len(klines[symbol])
-                        )
-
-                        # ================= CHECK TRADES =================
+                        # ================= CHECK TRADE =================
                         await check_trade(
                             bot,
                             symbol.upper(),
