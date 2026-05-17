@@ -3,5 +3,6 @@ aiohttp
 pandas
 ta
 requests
-openpyxl
 numpy
+openpyxl
+websockets
