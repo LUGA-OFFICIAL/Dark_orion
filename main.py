@@ -10,16 +10,15 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 FAST BEAST MODE")
+print("🔥 ULTRA FAST BEAST MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# وقت الانتظار بين الإشارات لنفس العملة
-COOLDOWN = 900
+# إشارات أسرع
+COOLDOWN = 300
 
-# العملات
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -87,8 +86,8 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        # يبدأ بسرعة
-        if len(data) < 10:
+        # يبدأ بسرعة جدًا
+        if len(data) < 5:
             return None
 
         df = pd.DataFrame(
@@ -96,29 +95,38 @@ def analyze(symbol):
             columns=["t", "o", "h", "l", "c", "v"]
         )
 
+        # تنظيف البيانات
+        df = df.astype(float, errors="ignore")
+        df = df.dropna()
+
+        if len(df) < 5:
+            return None
+
+        print(symbol, "ANALYZING...")
+
         price = df["c"].iloc[-1]
 
         # ================= INDICATORS =================
-        df["ema9"] = ta.trend.EMAIndicator(
+        ema9 = ta.trend.EMAIndicator(
             df["c"],
-            9
-        ).ema_indicator()
+            3
+        ).ema_indicator().iloc[-1]
 
-        df["ema21"] = ta.trend.EMAIndicator(
+        ema21 = ta.trend.EMAIndicator(
             df["c"],
-            21
-        ).ema_indicator()
+            6
+        ).ema_indicator().iloc[-1]
 
         rsi = ta.momentum.RSIIndicator(
             df["c"],
-            14
+            5
         ).rsi().iloc[-1]
 
         vol_now = df["v"].iloc[-1]
 
         vol_avg = (
             df["v"]
-            .rolling(10)
+            .rolling(3)
             .mean()
             .iloc[-1]
         )
@@ -126,7 +134,7 @@ def analyze(symbol):
         recent_move = (
             df["c"]
             .pct_change()
-            .tail(3)
+            .tail(2)
             .sum()
         )
 
@@ -134,32 +142,29 @@ def analyze(symbol):
         sniper = False
 
         # ================= TREND =================
-        if df["ema9"].iloc[-1] > df["ema21"].iloc[-1]:
+        if ema9 > ema21:
             score += 20
         else:
             score += 10
 
         # ================= RSI =================
-        if 35 <= rsi <= 70:
+        if 25 <= rsi <= 80:
             score += 20
-
-        if rsi < 40:
-            score += 10
 
         # ================= VOLUME =================
-        if vol_now > vol_avg * 0.5:
+        if vol_now > vol_avg * 0.3:
             score += 20
 
-        if vol_now > vol_avg * 1.5:
-            score += 25
+        if vol_now > vol_avg * 1.2:
+            score += 20
             sniper = True
 
         # ================= MOMENTUM =================
-        if recent_move > -0.01:
+        if recent_move > -0.02:
             score += 20
 
-        if recent_move > 0.015:
-            score += 25
+        if recent_move > 0.01:
+            score += 20
             sniper = True
 
         # ================= CANDLE =================
@@ -169,34 +174,37 @@ def analyze(symbol):
         )
 
         if candle > 0:
-            score += 15
+            score += 20
 
         # ================= GRADES =================
-        if sniper and score >= 65:
+        if sniper and score >= 60:
             grade = "🐋 SNIPER"
 
-        elif score >= 55:
+        elif score >= 50:
             grade = "🔥 HIGH"
 
-        elif score >= 40:
+        elif score >= 35:
             grade = "⚡ MEDIUM"
 
-        elif score >= 15:
+        else:
             grade = "🎯 SCALP"
 
-        else:
-            return None
-
         # ================= ATR =================
-        atr = ta.volatility.AverageTrueRange(
-            df["h"],
-            df["l"],
-            df["c"]
-        ).average_true_range().iloc[-1]
+        try:
 
-        tp1 = price + atr * 1.0
-        tp2 = price + atr * 1.8
-        sl = price - atr * 0.8
+            atr = ta.volatility.AverageTrueRange(
+                df["h"],
+                df["l"],
+                df["c"]
+            ).average_true_range().iloc[-1]
+
+        except:
+
+            atr = price * 0.005
+
+        tp1 = price + atr * 0.8
+        tp2 = price + atr * 1.5
+        sl = price - atr * 0.6
 
         return {
             "symbol": symbol.upper(),
@@ -216,7 +224,7 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL MESSAGE =================
+# ================= SIGNAL =================
 def signal_message(r):
 
     return (
@@ -230,7 +238,7 @@ def signal_message(r):
         f"📈 RSI: {r['rsi']}"
     )
 
-# ================= CHECK TRADE =================
+# ================= CHECK TRADES =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -368,13 +376,19 @@ async def ws_loop(bot):
                         print(symbol, close_price)
 
                         klines[symbol].append([
-                            k.get("start"),
+                            time.time(),
                             open_price,
                             high_price,
                             low_price,
                             close_price,
                             volume
                         ])
+
+                        print(
+                            "DATA LEN:",
+                            symbol,
+                            len(klines[symbol])
+                        )
 
                         # ================= CHECK TRADES =================
                         await check_trade(
