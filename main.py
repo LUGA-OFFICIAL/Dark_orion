@@ -9,16 +9,15 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION SMART ENGINE")
+print("🔥 LIVE SIGNAL MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
 # وقت الانتظار بين إشارات نفس العملة
-COOLDOWN = 300
+COOLDOWN = 180
 
-# العملات
 SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -29,22 +28,7 @@ SYMBOLS = [
     "BNBUSDT",
     "AVAXUSDT",
     "LINKUSDT",
-    "MATICUSDT",
-    "ARBUSDT",
-    "OPUSDT",
-    "APTUSDT",
-    "INJUSDT",
-    "SUIUSDT",
-    "SEIUSDT",
-    "NEARUSDT",
-    "ATOMUSDT",
-    "FILUSDT",
-    "LTCUSDT",
-    "TRXUSDT",
-    "AAVEUSDT",
-    "UNIUSDT",
-    "ETCUSDT",
-    "ICPUSDT"
+    "MATICUSDT"
 ]
 
 klines = defaultdict(lambda: deque(maxlen=50))
@@ -116,11 +100,11 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # تجاهل الحركات الضعيفة جدًا
+        # تجاهل الحركة الضعيفة جدًا
         if abs(move) < 0.03:
             return None
 
-        # ================= SIGNAL LEVEL =================
+        # ================= GRADES =================
         if move > 0.5:
             grade = "🐋 SNIPER"
 
@@ -155,32 +139,18 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL MESSAGE =================
+# ================= MESSAGE =================
 def signal_message(r):
 
     return (
-        f"🚨 ORION SMART SIGNAL\n\n"
-
-        f"🪙 Coin: {r['symbol']}\n"
-        f"📊 Type: {r['grade']}\n\n"
-
-        f"💰 Entry Zone:\n"
-        f"{fmt(r['price'])}\n\n"
-
-        f"🎯 Targets:\n"
-        f"TP1 → {fmt(r['tp1'])}\n"
-        f"TP2 → {fmt(r['tp2'])}\n\n"
-
-        f"🛑 Stop Loss:\n"
-        f"{fmt(r['sl'])}\n\n"
-
-        f"📈 Market Move:\n"
-        f"{r['score']}%\n\n"
-
-        f"📦 Volume:\n"
-        f"{r['volume']}\n\n"
-
-        f"⚠️ Risk Management Required"
+        f"{r['grade']} SIGNAL\n\n"
+        f"🪙 {r['symbol']}\n\n"
+        f"💰 Entry: {fmt(r['price'])}\n"
+        f"🎯 TP1: {fmt(r['tp1'])}\n"
+        f"🎯 TP2: {fmt(r['tp2'])}\n"
+        f"🛑 SL: {fmt(r['sl'])}\n\n"
+        f"📊 Move: {r['score']}%\n"
+        f"📦 Volume: {r['volume']}"
     )
 
 # ================= CHECK TRADE =================
@@ -191,7 +161,7 @@ async def check_trade(bot, symbol, price):
 
     trade = open_trades[symbol]
 
-    # ================= TP1 =================
+    # TP1
     if (
         not trade["tp1_hit"]
         and price >= trade["tp1"]
@@ -204,38 +174,35 @@ async def check_trade(bot, symbol, price):
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                f"🎯 TARGET 1 HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"🛡 Move SL To Entry"
+                f"🎯 TP1 HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}"
             )
         )
 
-    # ================= TP2 =================
+    # TP2
     if price >= trade["tp2"]:
 
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                f"🚀 FINAL TARGET HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"✅ Trade Completed"
+                f"🚀 TP2 HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}"
             )
         )
 
         del open_trades[symbol]
 
-    # ================= SL =================
+    # STOP LOSS
     elif price <= trade["sl"]:
 
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                f"🛑 STOP LOSS HIT\n\n"
-                f"🪙 {symbol}\n"
-                f"💰 Price: {fmt(price)}\n\n"
-                f"⚠️ Trade Closed"
+                f"🛑 SL HIT\n\n"
+                f"{symbol}\n"
+                f"Price: {fmt(price)}"
             )
         )
 
@@ -259,7 +226,7 @@ async def ws_loop(bot):
 
                 await bot.send_message(
                     chat_id=CHAT_ID,
-                    text="🔥 Orion Smart Engine Activated"
+                    text="🔥 Beast Mode Activated"
                 )
 
                 args = []
@@ -280,11 +247,14 @@ async def ws_loop(bot):
 
                     raw = await ws.recv()
 
+                    print("RAW:", raw[:200])
+
                     data = json.loads(raw)
 
                     if "data" not in data:
                         continue
 
+                    # استخراج الرمز من topic
                     topic = data.get("topic", "")
 
                     symbol = (
@@ -293,26 +263,33 @@ async def ws_loop(bot):
                         .lower()
                     )
 
+                    print("SYMBOL:", symbol)
+
                     for k in data["data"]:
 
                         close_price = float(
-                            k.get("close") or 0
+                            k.get("close")
+                            or 0
                         )
 
                         open_price = float(
-                            k.get("open") or 0
+                            k.get("open")
+                            or 0
                         )
 
                         high_price = float(
-                            k.get("high") or 0
+                            k.get("high")
+                            or 0
                         )
 
                         low_price = float(
-                            k.get("low") or 0
+                            k.get("low")
+                            or 0
                         )
 
                         volume = float(
-                            k.get("volume") or 0
+                            k.get("volume")
+                            or 0
                         )
 
                         klines[symbol].append([
@@ -330,7 +307,7 @@ async def ws_loop(bot):
                             len(klines[symbol])
                         )
 
-                        # ================= CHECK TRADES =================
+                        # ================= CHECK TRADE =================
                         await check_trade(
                             bot,
                             symbol.upper(),
