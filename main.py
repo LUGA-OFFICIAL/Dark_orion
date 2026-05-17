@@ -5,19 +5,17 @@ import time
 from collections import defaultdict, deque
 
 import pandas as pd
-import ta
 import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ULTRA FAST BEAST MODE")
+print("🔥 LIVE SIGNAL MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 
-# إشارات أسرع
-COOLDOWN = 300
+COOLDOWN = 180
 
 SYMBOLS = [
     "BTCUSDT",
@@ -42,7 +40,7 @@ SYMBOLS = [
     "FILUSDT"
 ]
 
-klines = defaultdict(lambda: deque(maxlen=300))
+klines = defaultdict(lambda: deque(maxlen=50))
 last_signal = {}
 open_trades = {}
 
@@ -86,8 +84,7 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        # يبدأ بسرعة جدًا
-        if len(data) < 5:
+        if len(data) < 3:
             return None
 
         df = pd.DataFrame(
@@ -95,116 +92,39 @@ def analyze(symbol):
             columns=["t", "o", "h", "l", "c", "v"]
         )
 
-        # تنظيف البيانات
-        df = df.astype(float, errors="ignore")
+        df = df.astype(float)
         df = df.dropna()
 
-        if len(df) < 5:
+        if len(df) < 3:
             return None
-
-        print(symbol, "ANALYZING...")
 
         price = df["c"].iloc[-1]
 
-        # ================= INDICATORS =================
-        ema9 = ta.trend.EMAIndicator(
-            df["c"],
-            3
-        ).ema_indicator().iloc[-1]
+        prev = df["c"].iloc[-2]
 
-        ema21 = ta.trend.EMAIndicator(
-            df["c"],
-            6
-        ).ema_indicator().iloc[-1]
+        move = ((price - prev) / prev) * 100
 
-        rsi = ta.momentum.RSIIndicator(
-            df["c"],
-            5
-        ).rsi().iloc[-1]
+        volume = df["v"].iloc[-1]
 
-        vol_now = df["v"].iloc[-1]
+        # أي حركة بسيطة
+        if abs(move) < 0.05:
+            return None
 
-        vol_avg = (
-            df["v"]
-            .rolling(3)
-            .mean()
-            .iloc[-1]
-        )
-
-        recent_move = (
-            df["c"]
-            .pct_change()
-            .tail(2)
-            .sum()
-        )
-
-        score = 0
-        sniper = False
-
-        # ================= TREND =================
-        if ema9 > ema21:
-            score += 20
-        else:
-            score += 10
-
-        # ================= RSI =================
-        if 25 <= rsi <= 80:
-            score += 20
-
-        # ================= VOLUME =================
-        if vol_now > vol_avg * 0.3:
-            score += 20
-
-        if vol_now > vol_avg * 1.2:
-            score += 20
-            sniper = True
-
-        # ================= MOMENTUM =================
-        if recent_move > -0.02:
-            score += 20
-
-        if recent_move > 0.01:
-            score += 20
-            sniper = True
-
-        # ================= CANDLE =================
-        candle = (
-            df["c"].iloc[-1]
-            - df["o"].iloc[-1]
-        )
-
-        if candle > 0:
-            score += 20
-
-        # ================= GRADES =================
-        if sniper and score >= 60:
+        if move > 0.5:
             grade = "🐋 SNIPER"
 
-        elif score >= 50:
+        elif move > 0.2:
             grade = "🔥 HIGH"
 
-        elif score >= 35:
+        elif move > 0:
             grade = "⚡ MEDIUM"
 
         else:
             grade = "🎯 SCALP"
 
-        # ================= ATR =================
-        try:
-
-            atr = ta.volatility.AverageTrueRange(
-                df["h"],
-                df["l"],
-                df["c"]
-            ).average_true_range().iloc[-1]
-
-        except:
-
-            atr = price * 0.005
-
-        tp1 = price + atr * 0.8
-        tp2 = price + atr * 1.5
-        sl = price - atr * 0.6
+        tp1 = price * 1.003
+        tp2 = price * 1.006
+        sl = price * 0.997
 
         return {
             "symbol": symbol.upper(),
@@ -213,8 +133,8 @@ def analyze(symbol):
             "tp1": tp1,
             "tp2": tp2,
             "sl": sl,
-            "score": score,
-            "rsi": round(rsi, 1),
+            "score": round(abs(move) * 100, 2),
+            "volume": round(volume, 2),
             "tp1_hit": False
         }
 
@@ -224,7 +144,7 @@ def analyze(symbol):
 
         return None
 
-# ================= SIGNAL =================
+# ================= MESSAGE =================
 def signal_message(r):
 
     return (
@@ -234,11 +154,11 @@ def signal_message(r):
         f"🎯 TP1: {fmt(r['tp1'])}\n"
         f"🎯 TP2: {fmt(r['tp2'])}\n"
         f"🛑 SL: {fmt(r['sl'])}\n\n"
-        f"📊 Score: {r['score']}%\n"
-        f"📈 RSI: {r['rsi']}"
+        f"📊 Move Score: {r['score']}%\n"
+        f"📦 Volume: {r['volume']}"
     )
 
-# ================= CHECK TRADES =================
+# ================= CHECK TRADE =================
 async def check_trade(bot, symbol, price):
 
     if symbol not in open_trades:
@@ -385,7 +305,7 @@ async def ws_loop(bot):
                         ])
 
                         print(
-                            "DATA LEN:",
+                            "DATA:",
                             symbol,
                             len(klines[symbol])
                         )
