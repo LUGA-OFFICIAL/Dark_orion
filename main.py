@@ -77,7 +77,8 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        if len(data) < 3:
+        # بيانات أكثر = إشارات أنظف
+        if len(data) < 8:
             return None
 
         df = pd.DataFrame(
@@ -89,7 +90,7 @@ def analyze(symbol):
 
         df = df.dropna()
 
-        if len(df) < 3:
+        if len(df) < 8:
             return None
 
         price = df["c"].iloc[-1]
@@ -100,8 +101,8 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # تجاهل الحركة الضعيفة جدًا
-        if abs(move) < 0.03:
+        # تجاهل الحركات الصغيرة جدًا
+        if abs(move) < 0.08:
             return None
 
         # ================= GRADES =================
@@ -117,9 +118,10 @@ def analyze(symbol):
         else:
             grade = "🎯 SCALP"
 
-        tp1 = price * 1.003
-        tp2 = price * 1.006
-        sl = price * 0.997
+        # أهداف أقوى
+        tp1 = price * 1.005
+        tp2 = price * 1.01
+        sl = price * 0.995
 
         return {
             "symbol": symbol.upper(),
@@ -176,7 +178,8 @@ async def check_trade(bot, symbol, price):
             text=(
                 f"🎯 TP1 HIT\n\n"
                 f"{symbol}\n"
-                f"Price: {fmt(price)}"
+                f"Price: {fmt(price)}\n\n"
+                f"🛡 SL moved to entry"
             )
         )
 
@@ -241,13 +244,11 @@ async def ws_loop(bot):
 
                 await ws.send(json.dumps(sub))
 
-                print("SUBSCRIBED:", args)
+                print("✅ SUBSCRIBED")
 
                 while True:
 
                     raw = await ws.recv()
-
-                    print("RAW:", raw[:200])
 
                     data = json.loads(raw)
 
@@ -262,8 +263,6 @@ async def ws_loop(bot):
                         .replace("kline.1.", "")
                         .lower()
                     )
-
-                    print("SYMBOL:", symbol)
 
                     for k in data["data"]:
 
