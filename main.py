@@ -5,14 +5,24 @@ import time
 from collections import defaultdict, deque
 
 import pandas as pd
+import ta
 import websockets
+
 from aiohttp import web
 from telegram.ext import Application
 
 print("🔥 LIVE SIGNAL MODE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# الخاص
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+
+# الجروب
+GROUP_CHAT_ID = int(
+    os.getenv("GROUP_CHAT_ID", "0")
+)
+
 PORT = int(os.getenv("PORT", "8080"))
 
 # وقت الانتظار بين إشارات نفس العملة
@@ -34,6 +44,35 @@ SYMBOLS = [
 klines = defaultdict(lambda: deque(maxlen=50))
 last_signal = {}
 open_trades = {}
+
+# ================= SEND =================
+async def send_all(bot, text):
+
+    try:
+
+        if CHAT_ID != 0:
+
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=text
+            )
+
+    except Exception as e:
+
+        print("PRIVATE SEND ERROR:", e)
+
+    try:
+
+        if GROUP_CHAT_ID != 0:
+
+            await bot.send_message(
+                chat_id=GROUP_CHAT_ID,
+                text=text
+            )
+
+    except Exception as e:
+
+        print("GROUP SEND ERROR:", e)
 
 # ================= HEALTH =================
 async def health(request):
@@ -77,7 +116,6 @@ def analyze(symbol):
 
         data = list(klines[symbol])
 
-        # بيانات أكثر = إشارات أنظف
         if len(data) < 8:
             return None
 
@@ -101,35 +139,54 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
+        # EMA FILTER
+        ema9 = ta.trend.EMAIndicator(
+            df["c"],
+            window=9
+        ).ema_indicator().iloc[-1]
+
+        ema21 = ta.trend.EMAIndicator(
+            df["c"],
+            window=21
+        ).ema_indicator().iloc[-1]
+
+        # اتجاه صاعد فقط
+        if ema9 <= ema21:
+            return None
+
         # تجاهل الحركات الصغيرة
         if abs(move) < 0.08:
             return None
 
+        # تجاهل الحركات المتأخرة
+        if move > 1.2:
+            return None
+
         # ================= GRADES =================
 
-        if move > 1.5:
+        if move > 0.8:
 
             grade = "🐋 SNIPER"
-
-            tp1 = price * 1.03
-            tp2 = price * 1.06
-            sl = price * 0.99
-
-        elif move > 0.7:
-
-            grade = "🔥 HIGH"
 
             tp1 = price * 1.02
             tp2 = price * 1.04
             sl = price * 0.992
 
-        elif move > 0.25:
+        elif move > 0.35:
+
+            grade = "🔥 HIGH"
+
+            tp1 = price * 1.015
+            tp2 = price * 1.03
+            sl = price * 0.994
+
+        elif move > 0.12:
 
             grade = "⚡ MEDIUM"
 
-            tp1 = price * 1.01
-            tp2 = price * 1.02
-            sl = price * 0.995
+            tp1 = price * 1.008
+            tp2 = price * 1.015
+            sl = price * 0.996
 
         else:
             return None
@@ -187,9 +244,9 @@ async def check_trade(bot, symbol, price):
 
         trade["sl"] = trade["price"]
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
+        await send_all(
+            bot,
+            (
                 f"🎯 TP1 HIT\n\n"
                 f"{symbol}\n"
                 f"Price: {fmt(price)}\n\n"
@@ -200,9 +257,9 @@ async def check_trade(bot, symbol, price):
     # TP2
     if price >= trade["tp2"]:
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
+        await send_all(
+            bot,
+            (
                 f"🚀 TP2 HIT\n\n"
                 f"{symbol}\n"
                 f"Price: {fmt(price)}"
@@ -214,9 +271,9 @@ async def check_trade(bot, symbol, price):
     # STOP LOSS
     elif price <= trade["sl"]:
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
+        await send_all(
+            bot,
+            (
                 f"🛑 SL HIT\n\n"
                 f"{symbol}\n"
                 f"Price: {fmt(price)}"
@@ -241,9 +298,9 @@ async def ws_loop(bot):
 
                 print("🔥 BYBIT CONNECTED")
 
-                await bot.send_message(
-                    chat_id=CHAT_ID,
-                    text="🔥 Beast Mode Activated"
+                await send_all(
+                    bot,
+                    "🔥 Beast Mode Activated"
                 )
 
                 args = []
@@ -269,7 +326,6 @@ async def ws_loop(bot):
                     if "data" not in data:
                         continue
 
-                    # استخراج الرمز
                     topic = data.get("topic", "")
 
                     symbol = (
@@ -281,28 +337,23 @@ async def ws_loop(bot):
                     for k in data["data"]:
 
                         close_price = float(
-                            k.get("close")
-                            or 0
+                            k.get("close") or 0
                         )
 
                         open_price = float(
-                            k.get("open")
-                            or 0
+                            k.get("open") or 0
                         )
 
                         high_price = float(
-                            k.get("high")
-                            or 0
+                            k.get("high") or 0
                         )
 
                         low_price = float(
-                            k.get("low")
-                            or 0
+                            k.get("low") or 0
                         )
 
                         volume = float(
-                            k.get("volume")
-                            or 0
+                            k.get("volume") or 0
                         )
 
                         klines[symbol].append([
@@ -349,9 +400,9 @@ async def ws_loop(bot):
                             symbol.upper()
                         ] = res
 
-                        await bot.send_message(
-                            chat_id=CHAT_ID,
-                            text=signal_message(res)
+                        await send_all(
+                            bot,
+                            signal_message(res)
                         )
 
         except Exception as e:
