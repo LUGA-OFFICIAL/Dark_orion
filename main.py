@@ -490,6 +490,7 @@ async def main():
     await app.start()
 
     print("✅ BOT RUNNING")
+    print("GROUP ID:", GROUP_CHAT_ID)
 
     # ================= GROUP TEST =================
     try:
