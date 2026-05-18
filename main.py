@@ -423,6 +423,15 @@ async def main():
     await app.start()
 
     print("✅ BOT RUNNING")
+    try:
+    await app.bot.send_message(
+        chat_id=GROUP_CHAT_ID,
+        text="✅ GROUP TEST"
+    )
+    print("GROUP OK")
+
+except Exception as e:
+    print("GROUP ERROR:", e)
 
     asyncio.create_task(
         ws_loop(app.bot)
