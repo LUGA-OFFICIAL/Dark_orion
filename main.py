@@ -11,69 +11,62 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 LIVE SIGNAL MODE")
+print("🔥 ORION ULTRA ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# الخاص
-CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+GROUP_CHAT_ID = int(
+    os.getenv("GROUP_CHAT_ID", "0")
+)
 
-# الجروب
-GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "0"))
+PORT = int(
+    os.getenv("PORT", "8080")
+)
 
-PORT = int(os.getenv("PORT", "8080"))
+# وقت منع تكرار الإشارات
+COOLDOWN = 600
 
-COOLDOWN = 180
-
+# العملات الأقوى
 SYMBOLS = [
+
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
     "XRPUSDT",
     "DOGEUSDT",
+
     "ADAUSDT",
-    "BNBUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "MATICUSDT"
+    "INJUSDT",
+    "TRXUSDT",
+
+    "ALGOUSDT",
+    "VETUSDT"
 ]
 
-klines = defaultdict(lambda: deque(maxlen=50))
+klines = defaultdict(
+    lambda: deque(maxlen=150)
+)
 
 last_signal = {}
 
 open_trades = {}
 
 # ================= SEND =================
-async def send_all(bot, text):
+async def send_signal(bot, text):
 
-    # الخاص
     try:
 
-        if CHAT_ID != 0:
-
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=text
-            )
+        await bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=text
+        )
 
     except Exception as e:
 
-        print("PRIVATE SEND ERROR:", e)
-
-    # الجروب
-    try:
-
-        if GROUP_CHAT_ID != 0:
-
-            await bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text=text
-            )
-
-    except Exception as e:
-
-        print("GROUP SEND ERROR:", e)
+        print(
+            "SEND ERROR:",
+            e
+        )
 
 # ================= HEALTH =================
 async def health(request):
@@ -84,7 +77,10 @@ async def start_health():
 
     app = web.Application()
 
-    app.router.add_get("/", health)
+    app.router.add_get(
+        "/",
+        health
+    )
 
     runner = web.AppRunner(app)
 
@@ -98,7 +94,9 @@ async def start_health():
 
     await site.start()
 
-    print(f"✅ Health server on {PORT}")
+    print(
+        f"✅ Health server on {PORT}"
+    )
 
 # ================= FORMAT =================
 def fmt(x):
@@ -116,9 +114,12 @@ def analyze(symbol):
 
     try:
 
-        data = list(klines[symbol])
+        data = list(
+            klines[symbol]
+        )
 
-        if len(data) < 8:
+        # بيانات أكثر للدقة
+        if len(data) < 50:
             return None
 
         df = pd.DataFrame(
@@ -137,9 +138,6 @@ def analyze(symbol):
 
         df = df.dropna()
 
-        if len(df) < 8:
-            return None
-
         price = df["c"].iloc[-1]
 
         prev = df["c"].iloc[-2]
@@ -151,7 +149,7 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # EMA FILTER
+        # ================= EMA TREND =================
         ema9 = ta.trend.EMAIndicator(
             df["c"],
             window=9
@@ -162,46 +160,106 @@ def analyze(symbol):
             window=21
         ).ema_indicator().iloc[-1]
 
-        # اتجاه صاعد فقط
-        if ema9 <= ema21:
+        ema50 = ta.trend.EMAIndicator(
+            df["c"],
+            window=50
+        ).ema_indicator().iloc[-1]
+
+        # اتجاه صاعد قوي
+        if not (
+            ema9 > ema21 > ema50
+        ):
             return None
 
-        # تجاهل الحركات الصغيرة
-        if abs(move) < 0.08:
+        # ================= RSI =================
+        rsi = ta.momentum.RSIIndicator(
+            df["c"],
+            window=14
+        ).rsi().iloc[-1]
+
+        # تجاهل التشبع
+        if rsi > 70:
+            return None
+
+        # ================= MACD =================
+        macd = ta.trend.MACD(
+            df["c"]
+        )
+
+        macd_line = (
+            macd
+            .macd()
+            .iloc[-1]
+        )
+
+        macd_signal = (
+            macd
+            .macd_signal()
+            .iloc[-1]
+        )
+
+        # زخم صاعد
+        if macd_line <= macd_signal:
+            return None
+
+        # ================= VOLUME =================
+        avg_volume = (
+            df["v"]
+            .rolling(20)
+            .mean()
+            .iloc[-1]
+        )
+
+        # سيولة قوية فقط
+        if volume < avg_volume * 2:
+            return None
+
+        # ================= BREAKOUT =================
+        recent_high = (
+            df["h"]
+            .rolling(20)
+            .max()
+            .iloc[-2]
+        )
+
+        # اختراق حقيقي فقط
+        if price <= recent_high:
+            return None
+
+        # ================= MOVE FILTER =================
+        # تجاهل الحركات الضعيفة
+        if abs(move) < 0.3:
             return None
 
         # تجاهل الدخول المتأخر
-        if move > 1.2:
+        if move > 1.5:
             return None
 
-        # ================= GRADES =================
+        # ================= SIGNAL LEVELS =================
 
-        if move > 0.8:
+        if move > 1:
 
             grade = "🐋 SNIPER"
 
-            tp1 = price * 1.02
-            tp2 = price * 1.04
+            tp1 = price * 1.025
+            tp2 = price * 1.05
             sl = price * 0.992
 
-        elif move > 0.35:
+        elif move > 0.6:
 
             grade = "🔥 HIGH"
 
-            tp1 = price * 1.015
-            tp2 = price * 1.03
+            tp1 = price * 1.02
+            tp2 = price * 1.04
             sl = price * 0.994
 
-        elif move > 0.12:
+        else:
 
             grade = "⚡ MEDIUM"
 
-            tp1 = price * 1.008
-            tp2 = price * 1.015
-            sl = price * 0.996
-
-        else:
-            return None
+            tp1 = price * 1.015
+            tp2 = price * 1.03
+            sl = price * 0.995
 
         return {
 
@@ -217,16 +275,30 @@ def analyze(symbol):
 
             "sl": sl,
 
-            "score": round(abs(move), 3),
+            "score": round(
+                abs(move),
+                3
+            ),
 
-            "volume": round(volume, 2),
+            "volume": round(
+                volume,
+                2
+            ),
+
+            "rsi": round(
+                rsi,
+                1
+            ),
 
             "tp1_hit": False
         }
 
     except Exception as e:
 
-        print("ANALYZE ERROR:", e)
+        print(
+            "ANALYZE ERROR:",
+            e
+        )
 
         return None
 
@@ -248,6 +320,8 @@ def signal_message(r):
         f"🛑 SL: {fmt(r['sl'])}\n\n"
 
         f"📊 Move: {r['score']}%\n"
+
+        f"📈 RSI: {r['rsi']}\n"
 
         f"📦 Volume: {r['volume']}"
     )
@@ -274,7 +348,7 @@ async def check_trade(
 
         trade["sl"] = trade["price"]
 
-        await send_all(
+        await send_signal(
             bot,
             (
                 f"🎯 TP1 HIT\n\n"
@@ -290,7 +364,7 @@ async def check_trade(
     # TP2
     if price >= trade["tp2"]:
 
-        await send_all(
+        await send_signal(
             bot,
             (
                 f"🚀 TP2 HIT\n\n"
@@ -306,7 +380,7 @@ async def check_trade(
     # STOP LOSS
     elif price <= trade["sl"]:
 
-        await send_all(
+        await send_signal(
             bot,
             (
                 f"🛑 SL HIT\n\n"
@@ -322,7 +396,10 @@ async def check_trade(
 # ================= WEBSOCKET =================
 async def ws_loop(bot):
 
-    url = "wss://stream.bybit.com/v5/public/spot"
+    # 5 MINUTE TIMEFRAME
+    url = (
+        "wss://stream.bybit.com/v5/public/spot"
+    )
 
     while True:
 
@@ -333,11 +410,13 @@ async def ws_loop(bot):
                 ping_interval=20
             ) as ws:
 
-                print("🔥 BYBIT CONNECTED")
+                print(
+                    "🔥 BYBIT CONNECTED"
+                )
 
-                await send_all(
+                await send_signal(
                     bot,
-                    "🚀 Orion Signals Engine Online"
+                    "🚀 ORION ULTRA ENGINE ONLINE"
                 )
 
                 args = []
@@ -345,7 +424,7 @@ async def ws_loop(bot):
                 for s in SYMBOLS:
 
                     args.append(
-                        f"kline.1.{s}"
+                        f"kline.5.{s}"
                     )
 
                 sub = {
@@ -357,7 +436,9 @@ async def ws_loop(bot):
                     json.dumps(sub)
                 )
 
-                print("✅ SUBSCRIBED")
+                print(
+                    "✅ SUBSCRIBED"
+                )
 
                 while True:
 
@@ -376,7 +457,7 @@ async def ws_loop(bot):
                     symbol = (
                         topic
                         .replace(
-                            "kline.1.",
+                            "kline.5.",
                             ""
                         )
                         .lower()
@@ -432,14 +513,14 @@ async def ws_loop(bot):
                             )
                         )
 
-                        # CHECK TRADE
+                        # متابعة الصفقات
                         await check_trade(
                             bot,
                             symbol.upper(),
                             close_price
                         )
 
-                        # ANALYZE
+                        # تحليل
                         res = analyze(symbol)
 
                         if not res:
@@ -447,6 +528,7 @@ async def ws_loop(bot):
 
                         now = time.time()
 
+                        # منع التكرار
                         if symbol in last_signal:
 
                             if (
@@ -462,14 +544,17 @@ async def ws_loop(bot):
                             symbol.upper()
                         ] = res
 
-                        await send_all(
+                        await send_signal(
                             bot,
                             signal_message(res)
                         )
 
         except Exception as e:
 
-            print("WS ERROR:", e)
+            print(
+                "WS ERROR:",
+                e
+            )
 
             await asyncio.sleep(5)
 
@@ -490,35 +575,15 @@ async def main():
     await app.start()
 
     print("✅ BOT RUNNING")
-    print("GROUP ID:", GROUP_CHAT_ID)
 
-    # ================= GROUP TEST =================
     try:
 
-        me = await app.bot.get_me()
-
-        print(
-            "BOT USERNAME:",
-            me.username
+        await app.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text="🚀 ORION ULTRA ENGINE ONLINE"
         )
 
-        if GROUP_CHAT_ID != 0:
-
-            chat = await app.bot.get_chat(
-                GROUP_CHAT_ID
-            )
-
-            print(
-                "GROUP FOUND:",
-                chat.title
-            )
-
-            await app.bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text="✅ GROUP TEST"
-            )
-
-            print("GROUP OK")
+        print("GROUP OK")
 
     except Exception as e:
 
@@ -527,7 +592,6 @@ async def main():
             e
         )
 
-    # ================= START WS =================
     asyncio.create_task(
         ws_loop(app.bot)
     )
