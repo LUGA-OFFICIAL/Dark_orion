@@ -11,7 +11,7 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION ULTRA ENGINE")
+print("🔥🔥 ORION ULTRA ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
