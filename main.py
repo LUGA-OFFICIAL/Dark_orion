@@ -23,10 +23,10 @@ PORT = int(
     os.getenv("PORT", "8080")
 )
 
-# وقت منع تكرار الإشارات
+# منع تكرار الإشارات
 COOLDOWN = 600
 
-# العملات الأقوى
+# العملات
 SYMBOLS = [
 
     "BTCUSDT",
@@ -118,7 +118,6 @@ def analyze(symbol):
             klines[symbol]
         )
 
-        # بيانات أكثر للدقة
         if len(data) < 50:
             return None
 
@@ -149,7 +148,7 @@ def analyze(symbol):
 
         volume = df["v"].iloc[-1]
 
-        # ================= EMA TREND =================
+        # ================= EMA =================
         ema9 = ta.trend.EMAIndicator(
             df["c"],
             window=9
@@ -165,7 +164,6 @@ def analyze(symbol):
             window=50
         ).ema_indicator().iloc[-1]
 
-        # اتجاه صاعد قوي
         if not (
             ema9 > ema21 > ema50
         ):
@@ -177,7 +175,6 @@ def analyze(symbol):
             window=14
         ).rsi().iloc[-1]
 
-        # تجاهل التشبع
         if rsi > 70:
             return None
 
@@ -198,7 +195,6 @@ def analyze(symbol):
             .iloc[-1]
         )
 
-        # زخم صاعد
         if macd_line <= macd_signal:
             return None
 
@@ -210,33 +206,29 @@ def analyze(symbol):
             .iloc[-1]
         )
 
-        # سيولة قوية فقط
-        if volume < avg_volume * 2:
+        # أخف قليلاً
+        if volume < avg_volume * 1.3:
             return None
 
         # ================= BREAKOUT =================
         recent_high = (
             df["h"]
-            .rolling(20)
+            .rolling(10)
             .max()
             .iloc[-2]
         )
 
-        # اختراق حقيقي فقط
         if price <= recent_high:
             return None
 
-        # ================= MOVE FILTER =================
-        # تجاهل الحركات الضعيفة
-        if abs(move) < 0.3:
+        # ================= MOVE =================
+        if abs(move) < 0.18:
             return None
 
-        # تجاهل الدخول المتأخر
         if move > 1.5:
             return None
 
-        # ================= SIGNAL LEVELS =================
-
+        # ================= SIGNAL TYPES =================
         if move > 1:
 
             grade = "🐋 SNIPER"
@@ -396,7 +388,6 @@ async def check_trade(
 # ================= WEBSOCKET =================
 async def ws_loop(bot):
 
-    # 5 MINUTE TIMEFRAME
     url = (
         "wss://stream.bybit.com/v5/public/spot"
     )
@@ -528,7 +519,6 @@ async def ws_loop(bot):
 
                         now = time.time()
 
-                        # منع التكرار
                         if symbol in last_signal:
 
                             if (
