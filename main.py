@@ -11,7 +11,7 @@ import websockets
 from aiohttp import web
 from telegram.ext import Application
 
-print("🔥 ORION ULTRA ENGINE")
+print("🔥 ORION PRIME ENGINE")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -23,8 +23,8 @@ PORT = int(
     os.getenv("PORT", "8080")
 )
 
-# منع تكرار الإشارات
-COOLDOWN = 600
+# منع التكرار
+COOLDOWN = 900
 
 # العملات
 SYMBOLS = [
@@ -44,7 +44,7 @@ SYMBOLS = [
 ]
 
 klines = defaultdict(
-    lambda: deque(maxlen=150)
+    lambda: deque(maxlen=200)
 )
 
 last_signal = {}
@@ -118,7 +118,7 @@ def analyze(symbol):
             klines[symbol]
         )
 
-        if len(data) < 50:
+        if len(data) < 60:
             return None
 
         df = pd.DataFrame(
@@ -134,8 +134,6 @@ def analyze(symbol):
         )
 
         df = df.astype(float)
-
-        df = df.dropna()
 
         price = df["c"].iloc[-1]
 
@@ -164,6 +162,7 @@ def analyze(symbol):
             window=50
         ).ema_indicator().iloc[-1]
 
+        # ترند قوي فقط
         if not (
             ema9 > ema21 > ema50
         ):
@@ -175,7 +174,10 @@ def analyze(symbol):
             window=14
         ).rsi().iloc[-1]
 
-        if rsi > 70:
+        if rsi > 65:
+            return None
+
+        if rsi < 52:
             return None
 
         # ================= MACD =================
@@ -206,51 +208,76 @@ def analyze(symbol):
             .iloc[-1]
         )
 
-        # أخف قليلاً
-        if volume < avg_volume * 1.3:
+        # حجم قوي فقط
+        if volume < avg_volume * 1.5:
             return None
 
         # ================= BREAKOUT =================
         recent_high = (
             df["h"]
-            .rolling(10)
+            .rolling(12)
             .max()
             .iloc[-2]
         )
 
-        if price <= recent_high:
+        breakout = (
+            price > recent_high
+        )
+
+        # pullback confirmation
+        pullback_ok = (
+            df["l"].iloc[-1] > ema9
+        )
+
+        if not (
+            breakout
+            and pullback_ok
+        ):
             return None
 
-        # ================= MOVE =================
-        if abs(move) < 0.18:
+        # ================= CANDLE FILTER =================
+        candle_size = (
+            (
+                df["h"].iloc[-1]
+                - df["l"].iloc[-1]
+            )
+            / price
+        ) * 100
+
+        # تجاهل الشموع العنيفة
+        if candle_size > 1.8:
             return None
 
-        if move > 1.5:
+        # ================= MOVE FILTER =================
+        if abs(move) < 0.22:
             return None
 
-        # ================= SIGNAL TYPES =================
-        if move > 1:
+        if move > 1.2:
+            return None
+
+        # ================= SIGNAL LEVELS =================
+        if move > 0.9:
 
             grade = "🐋 SNIPER"
 
-            tp1 = price * 1.025
-            tp2 = price * 1.05
-            sl = price * 0.992
+            tp1 = price * 1.02
+            tp2 = price * 1.04
+            sl = price * 0.993
 
-        elif move > 0.6:
+        elif move > 0.5:
 
             grade = "🔥 HIGH"
 
-            tp1 = price * 1.02
-            tp2 = price * 1.04
+            tp1 = price * 1.015
+            tp2 = price * 1.03
             sl = price * 0.994
 
         else:
 
             grade = "⚡ MEDIUM"
 
-            tp1 = price * 1.015
-            tp2 = price * 1.03
+            tp1 = price * 1.01
+            tp2 = price * 1.02
             sl = price * 0.995
 
         return {
@@ -369,7 +396,7 @@ async def check_trade(
 
         del open_trades[symbol]
 
-    # STOP LOSS
+    # SL
     elif price <= trade["sl"]:
 
         await send_signal(
@@ -407,7 +434,7 @@ async def ws_loop(bot):
 
                 await send_signal(
                     bot,
-                    "🚀 ORION ULTRA ENGINE ONLINE"
+                    "🚀 ORION PRIME ENGINE ONLINE"
                 )
 
                 args = []
@@ -415,7 +442,7 @@ async def ws_loop(bot):
                 for s in SYMBOLS:
 
                     args.append(
-                        f"kline.5.{s}"
+                        f"kline.15.{s}"
                     )
 
                 sub = {
@@ -448,7 +475,7 @@ async def ws_loop(bot):
                     symbol = (
                         topic
                         .replace(
-                            "kline.5.",
+                            "kline.15.",
                             ""
                         )
                         .lower()
@@ -519,6 +546,7 @@ async def ws_loop(bot):
 
                         now = time.time()
 
+                        # منع التكرار
                         if symbol in last_signal:
 
                             if (
@@ -570,7 +598,7 @@ async def main():
 
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
-            text="🚀 ORION ULTRA ENGINE ONLINE"
+            text="🚀 ORION PRIME ENGINE ONLINE"
         )
 
         print("GROUP OK")
